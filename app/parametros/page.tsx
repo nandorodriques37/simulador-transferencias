@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, PageHeader, Progress, Spinner } from "@/components/ui";
-import { CdManager, Parametros } from "@/components/CdManager";
-import { fmtInt, rotuloMes } from "@/lib/format";
+import { Parametros } from "@/components/CdManager";
+import { ParametrosEditor } from "@/components/ParametrosEditor";
+import { fmtInt } from "@/lib/format";
 
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { posicaoLinhas: number; pedidosLinhas: number; achados: Achado[]; ok: boolean }
@@ -34,7 +35,6 @@ export default function ParametrosPage() {
   useEffect(carregar, []);
 
   if (!params) return <div className="pt-10"><Spinner label="Carregando…" /></div>;
-  const setP = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
 
   const salvar = async () => {
     setSalvando(true); setMsg(null);
@@ -91,34 +91,16 @@ export default function ParametrosPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Parâmetros */}
         <div className="card p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-sm font-semibold text-slate-700">Parâmetros de negócio</div>
+          <div className="mb-1 flex items-center justify-between">
+            <div className="text-sm font-semibold text-slate-700">Parâmetros oficiais</div>
             <button className="btn-primary" onClick={salvar} disabled={salvando}>{salvando ? "Salvando…" : "Salvar (nova versão)"}</button>
           </div>
+          <p className="mb-3 text-xs text-slate-500">
+            Fonte da verdade do plano. Salvar gera uma nova versão de cálculo (com auditoria) e
+            atualiza Dashboard, Plano e Aprovação. Para testar variações sem oficializar, use o <b>Simulador</b>.
+          </p>
 
-          <div className="mb-4">
-            <CdManager params={params} disponiveis={disponiveis} onChange={setParams} />
-          </div>
-
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <label className="text-sm">
-              <span className="label">Fator segurança imediata</span>
-              <input type="number" step="0.1" className="input mt-1 w-full" value={params.fatorSegurancaImediata}
-                onChange={(e) => setP({ fatorSegurancaImediata: Number(e.target.value) })} />
-            </label>
-            <label className="text-sm">
-              <span className="label">Limite cobertura (dias)</span>
-              <input type="number" className="input mt-1 w-full" value={params.limiteCoberturaDias}
-                onChange={(e) => setP({ limiteCoberturaDias: Number(e.target.value) })} />
-            </label>
-          </div>
-
-          <label className="text-sm">
-            <span className="label">Horizonte (meses AAAA_MM)</span>
-            <input className="input mt-1 w-full" value={params.horizonteMeses.join(", ")}
-              onChange={(e) => setP({ horizonteMeses: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
-            <div className="mt-1 text-xs text-slate-400">{params.horizonteMeses.map(rotuloMes).join(" · ")}</div>
-          </label>
+          <ParametrosEditor params={params} disponiveis={disponiveis} onChange={setParams} />
 
           <div className="mt-4">
             <div className="label mb-1">Histórico de parâmetros (auditoria)</div>

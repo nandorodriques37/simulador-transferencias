@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Alert, PageHeader, Spinner } from "@/components/ui";
-import { CdManager, Parametros } from "@/components/CdManager";
-import { corCd, fmtInt, fmtRs, rotuloMes } from "@/lib/format";
+import { Parametros } from "@/components/CdManager";
+import { ParametrosEditor } from "@/components/ParametrosEditor";
+import { corCd, fmtInt, fmtRs } from "@/lib/format";
 
 interface ResumoSim {
   valorTransfTotal: number; valorImediata: number; impactoFiscal: number; linhas: number;
@@ -22,9 +23,12 @@ export default function Simulador() {
   const [res, setRes] = useState<SimResp | null>(null);
   const [rodando, setRodando] = useState(false);
   const [cenarios, setCenarios] = useState<{ id: string; nome: string; criadoEm: string }[]>([]);
+  const [msgOficial, setMsgOficial] = useState<string | null>(null);
+
+  const carregarOficiais = () => fetch("/api/params").then((r) => r.json()).then((d) => setParams(d.parametros));
 
   useEffect(() => {
-    fetch("/api/params").then((r) => r.json()).then((d) => setParams(d.parametros));
+    carregarOficiais();
     fetch("/api/cds").then((r) => r.json()).then((d) => setDisponiveis(d.todos ?? []));
     carregarCenarios();
   }, []);
@@ -33,7 +37,19 @@ export default function Simulador() {
 
   if (!params) return <div className="pt-10"><Spinner label="Carregando parâmetros…" /></div>;
 
-  const setP = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
+  const restaurar = () => { carregarOficiais(); setMsgOficial("Parâmetros oficiais restaurados."); };
+
+  const aplicarOficial = async () => {
+    setRodando(true);
+    setMsgOficial(null);
+    try {
+      const r = await fetch("/api/params", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(params) });
+      const d = await r.json();
+      setMsgOficial(r.ok ? `Aplicado como oficial (v${d.version}) — nova versão de cálculo ${d.versaoId}.` : `Erro: ${d.erro}`);
+    } finally {
+      setRodando(false);
+    }
+  };
 
   const simular = async (salvarComo?: string) => {
     setRodando(true);
@@ -70,30 +86,19 @@ export default function Simulador() {
 
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         <div className="card p-4">
-          <div className="mb-3 text-sm font-semibold text-slate-700">CDs e prioridade</div>
-          <div className="mb-4">
-            <CdManager params={params} disponiveis={disponiveis} onChange={setParams} />
-          </div>
+          <div className="mb-1 text-sm font-semibold text-slate-700">Cenário simulado</div>
+          <p className="mb-3 text-xs text-slate-500">
+            Começa a partir dos <b>parâmetros oficiais</b>. Ajuste aqui para testar — nada é salvo
+            até você <b>Salvar cenário</b> ou <b>Aplicar como oficial</b>.
+          </p>
 
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-sm">
-              <span className="label">Fator segurança imediata</span>
-              <input type="number" step="0.1" className="input mt-1 w-full" value={params.fatorSegurancaImediata}
-                onChange={(e) => setP({ fatorSegurancaImediata: Number(e.target.value) })} />
-            </label>
-            <label className="text-sm">
-              <span className="label">Limite cobertura (dias)</span>
-              <input type="number" className="input mt-1 w-full" value={params.limiteCoberturaDias}
-                onChange={(e) => setP({ limiteCoberturaDias: Number(e.target.value) })} />
-            </label>
-          </div>
+          <ParametrosEditor params={params} disponiveis={disponiveis} onChange={setParams} />
 
-          <div className="mt-3">
-            <span className="label">Horizonte (meses AAAA_MM)</span>
-            <input className="input mt-1 w-full" value={params.horizonteMeses.join(", ")}
-              onChange={(e) => setP({ horizonteMeses: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
-            <div className="mt-1 text-xs text-slate-400">{params.horizonteMeses.map(rotuloMes).join(" · ")}</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="btn-ghost" onClick={restaurar} disabled={rodando}>↺ Restaurar oficiais</button>
+            <button className="btn-ghost" onClick={aplicarOficial} disabled={rodando}>✓ Aplicar como oficial</button>
           </div>
+          {msgOficial && <div className="mt-2"><Alert tom={msgOficial.startsWith("Erro") ? "erro" : "good"}>{msgOficial}</Alert></div>}
         </div>
 
         <div className="space-y-4">
