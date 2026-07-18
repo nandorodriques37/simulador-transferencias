@@ -43,7 +43,8 @@ export interface PedidoProjetado {
 
 /** Parâmetros editáveis com trilha de auditoria. */
 export interface Parametros {
-  prioridadeCds: number[]; // ordem de alocação, ex.: [1, 9, 2, 8, 7]
+  cdOrigem: number; // CD de origem do excesso (ex.: 10). Nunca é destino.
+  prioridadeCds: number[]; // CDs destino em ordem de alocação, ex.: [1, 9, 2, 8, 7]
   horizonteMeses: string[]; // ex.: ['2026_07','2026_08','2026_09']
   aliquotaFiscal: Record<number, number>; // por CD destino, fração (0.052 = 5,2%)
   fatorSegurancaImediata: number; // ex.: 0.5

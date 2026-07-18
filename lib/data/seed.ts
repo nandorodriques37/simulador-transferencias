@@ -40,7 +40,8 @@ export interface BaseDemo {
 export function gerarBaseDemo(nSkus = 4000, seed = 42): BaseDemo {
   const r = rng(seed);
   const meses = horizontePadrao();
-  const cds = [1, 9, 2, 8, 7];
+  // Rede com 11 CDs: origem 10 + 10 destinos possíveis (1..9 e 11).
+  const cds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11];
   const posicao: PosicaoEstoque[] = [];
   const pedidos: PedidoProjetado[] = [];
 

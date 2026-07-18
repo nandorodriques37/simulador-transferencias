@@ -10,7 +10,9 @@ export async function GET() {
 }
 
 function validar(p: Partial<Parametros>): string | null {
+  if (typeof p.cdOrigem !== "number" || isNaN(p.cdOrigem)) return "cdOrigem inválido";
   if (!Array.isArray(p.prioridadeCds) || p.prioridadeCds.length === 0) return "prioridadeCds inválida";
+  if (p.prioridadeCds.map(Number).includes(Number(p.cdOrigem))) return "o CD de origem não pode estar entre os destinos";
   if (!Array.isArray(p.horizonteMeses) || p.horizonteMeses.length === 0) return "horizonteMeses inválido";
   if (typeof p.fatorSegurancaImediata !== "number" || p.fatorSegurancaImediata < 0) return "fatorSegurancaImediata inválido";
   if (typeof p.limiteCoberturaDias !== "number" || p.limiteCoberturaDias <= 0) return "limiteCoberturaDias inválido";
@@ -23,6 +25,7 @@ export async function PUT(req: NextRequest) {
   const erro = validar(body);
   if (erro) return NextResponse.json({ erro }, { status: 400 });
   const params: Parametros = {
+    cdOrigem: Number(body.cdOrigem),
     prioridadeCds: body.prioridadeCds!.map(Number),
     horizonteMeses: body.horizonteMeses!,
     aliquotaFiscal: Object.fromEntries(Object.entries(body.aliquotaFiscal!).map(([k, v]) => [Number(k), Number(v)])),

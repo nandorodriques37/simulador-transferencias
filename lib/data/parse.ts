@@ -1,120 +1,180 @@
 import { PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
 import { CD_ORIGEM_PADRAO } from "./defaults";
+import { ColSpec, normKey, SCHEMA_PEDIDOS, SCHEMA_POSICAO } from "./schema";
 
-/** Normaliza cabeçalho: minúsculas, sem acento, sem separadores. */
-export function normKey(s: string): string {
-  return String(s)
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+export interface ErroLinha {
+  linha: number; // linha aproximada na planilha (cabeçalho = 1)
+  campo: string;
+  coluna: string;
+  valor: string;
+  msg: string;
 }
 
-function pick(row: Record<string, unknown>, aliases: string[]): unknown {
-  const norm: Record<string, unknown> = {};
-  for (const k of Object.keys(row)) norm[normKey(k)] = row[k];
-  for (const a of aliases) {
-    const v = norm[normKey(a)];
-    if (v !== undefined && v !== null && v !== "") return v;
-  }
-  return undefined;
+export interface DiagParse {
+  header: string[];
+  mapeadas: { campo: string; rotulo: string; coluna: string }[];
+  faltando: { campo: string; rotulo: string; aliases: string[] }[]; // requeridas não encontradas
+  ignoradas: string[]; // colunas do arquivo sem uso
+  totalLinhas: number;
+  linhasValidas: number;
+  errosLinha: ErroLinha[];
+  errosTruncados: number;
 }
 
-function num(v: unknown): number {
-  if (v === undefined || v === null || v === "") return 0;
+const MAX_ERROS = 100;
+
+function coefNum(v: unknown): number | null {
+  if (v === undefined || v === null || v === "") return null;
   if (typeof v === "number") return v;
-  const s = String(v).replace(/\./g, "").replace(",", ".").replace(/[^0-9.\-]/g, "");
-  const n = parseFloat(s);
-  return isNaN(n) ? 0 : n;
+  const s = String(v).trim().replace(/\s/g, "");
+  // pt-BR: 1.234,56 -> 1234.56 ; en: 1234.56
+  let norm = s;
+  if (/,/.test(s) && /\./.test(s)) norm = s.replace(/\./g, "").replace(",", ".");
+  else if (/,/.test(s)) norm = s.replace(",", ".");
+  norm = norm.replace(/[^0-9.\-]/g, "");
+  const n = parseFloat(norm);
+  return isNaN(n) ? null : n;
 }
-function str(v: unknown): string {
-  return v === undefined || v === null ? "" : String(v).trim();
+const str = (v: unknown): string => (v === undefined || v === null ? "" : String(v).trim());
+
+interface ColMap {
+  spec: ColSpec;
+  coluna: string | null; // cabeçalho original casado
 }
 
-const A = {
-  codigo: ["CodsemDv", "codigo_produto", "codigoProduto", "codigo", "Cod"],
-  deposito: ["Deposito", "deposito"],
-  produto: ["Produto", "descricao", "produto", "nome_produto"],
-  disp: ["Estoque_DISP_CDs", "estoque_disponivel", "estoqueDisponivel", "EstoqueDisponivel"],
-  objetivo: ["ESTOQUE_OBJETIVO", "estoque_objetivo", "estoqueObjetivo"],
-  pendente: ["Quant.Pendente", "quantidade_pendente", "quantidadePendente", "QuantPendente"],
-  vmed: ["Venda_ QTD_Média3meses", "venda_media_3m", "Venda QTD Média 3 meses", "vendaMedia3m"],
-  custo: ["PRDP_VL_CMPCSICMS", "custo_reposicao", "custoReposicao"],
-  lista: ["Preço Lista", "preco_lista", "precoLista", "PrecoLista"],
-  emb: ["Qt_Emb_Compra", "emb_compra", "embCompra"],
-  fornecedor: ["Fornecedor", "fornecedor"],
-  comprador: ["Comprador", "comprador"],
-  analista: ["Analista", "analista"],
-  cat1: ["CAT_NÍVEL_1", "categoria_n1", "categoriaN1", "categoria_nivel_1"],
-  cat2: ["CAT_NÍVEL_2", "categoria_n2", "categoriaN2", "categoria_nivel_2"],
-  cat3: ["CAT_NÍVEL_3", "categoria_n3", "categoriaN3", "categoria_nivel_3"],
-  cat4: ["CAT_NÍVEL_4", "categoria_n4", "categoriaN4", "categoria_nivel_4"],
-  ame: ["FLAG_AME", "flag_ame", "ame"],
-  monit: ["Monitorado", "monitorado"],
-  marca: ["MARCA_PROPRIA", "marca_propria", "marcaPropria"],
-  lead: ["LeadTimeReal", "lead_time", "leadTime"],
-};
+function mapearColunas(header: string[], schema: ColSpec[]): ColMap[] {
+  const normToOrig = new Map<string, string>();
+  for (const h of header) if (!normToOrig.has(normKey(h))) normToOrig.set(normKey(h), h);
+  return schema.map((spec) => {
+    let coluna: string | null = null;
+    for (const a of spec.aliases) {
+      const orig = normToOrig.get(normKey(a));
+      if (orig) { coluna = orig; break; }
+    }
+    return { spec, coluna };
+  });
+}
 
-const P = {
-  anoMes: ["ano_mes", "anoMes", "ano mes"],
-  cd: ["codigo_deposito_pd", "cd_destino", "cdDestino", "cd"],
-  codigo: ["codigo_produto", "codigoProduto", "CodsemDv", "codigo"],
-  pedido: ["pedido"],
-  estoqueAtual: ["estoque_atual", "estoqueAtual"],
-  estoqueProjetado: ["estoque_projetado", "estoqueProjetado"],
-  eo: ["eo"],
-};
+/** Parser genérico dirigido por esquema: coage tipos e coleta erros precisos. */
+export function parseComEsquema(
+  rows: Record<string, unknown>[],
+  schema: ColSpec[],
+): { itens: Record<string, unknown>[]; diag: DiagParse } {
+  const header = rows.length ? Object.keys(rows[0]) : [];
+  const cols = mapearColunas(header, schema);
+  const usados = new Set(cols.map((c) => c.coluna).filter(Boolean) as string[]);
 
-export function parsePosicao(rows: Record<string, unknown>[]): PosicaoEstoque[] {
-  const out: PosicaoEstoque[] = [];
-  for (const row of rows) {
-    const codigo = Math.round(num(pick(row, A.codigo)));
-    if (!codigo) continue;
-    const deposito = Math.round(num(pick(row, A.deposito))) || CD_ORIGEM_PADRAO;
-    out.push({
-      idSku: `${deposito}-${codigo}`,
+  const faltando = cols
+    .filter((c) => c.spec.required && !c.coluna)
+    .map((c) => ({ campo: c.spec.campo, rotulo: c.spec.rotulo, aliases: c.spec.aliases }));
+  const ignoradas = header.filter((h) => !usados.has(h));
+
+  const itens: Record<string, unknown>[] = [];
+  const errosLinha: ErroLinha[] = [];
+  let errosTruncados = 0;
+
+  // Sem colunas requeridas não faz sentido processar linhas.
+  if (faltando.length === 0) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const linha = i + 2; // +1 header, +1 base-1
+      const obj: Record<string, unknown> = {};
+      let linhaErro = false;
+      for (const { spec, coluna } of cols) {
+        if (!coluna) continue;
+        const raw = row[coluna];
+        if (spec.tipo === "str") {
+          obj[spec.campo] = str(raw);
+          continue;
+        }
+        const n = coefNum(raw);
+        if (n === null) {
+          if (spec.required) {
+            linhaErro = true;
+            if (errosLinha.length < MAX_ERROS) errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor não numérico em coluna obrigatória "${coluna}"` });
+            else errosTruncados++;
+          }
+          obj[spec.campo] = 0;
+          continue;
+        }
+        if (spec.naoNegativo && n < 0) {
+          linhaErro = true;
+          if (errosLinha.length < MAX_ERROS) errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor negativo não permitido em "${coluna}" (${n})` });
+          else errosTruncados++;
+        }
+        obj[spec.campo] = spec.tipo === "int" ? Math.round(n) : n;
+      }
+      // Linha só entra se tiver as chaves obrigatórias preenchidas (evita
+      // linhas em branco no fim do arquivo). Chaves opcionais (ex.: deposito)
+      // não bloqueiam.
+      const temChave = cols
+        .filter((c) => c.spec.chave && c.spec.required)
+        .every((c) => {
+          const v = obj[c.spec.campo];
+          return v !== undefined && v !== "" && v !== 0;
+        });
+      if (!linhaErro && temChave) itens.push(obj);
+    }
+  }
+
+  return {
+    itens,
+    diag: {
+      header,
+      mapeadas: cols.filter((c) => c.coluna).map((c) => ({ campo: c.spec.campo, rotulo: c.spec.rotulo, coluna: c.coluna! })),
+      faltando,
+      ignoradas,
+      totalLinhas: rows.length,
+      linhasValidas: itens.length,
+      errosLinha,
+      errosTruncados,
+    },
+  };
+}
+
+export function parsePosicao(rows: Record<string, unknown>[]): { itens: PosicaoEstoque[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(rows, SCHEMA_POSICAO);
+  const out: PosicaoEstoque[] = itens.map((o) => {
+    const codigo = Number(o.codigoProduto);
+    const deposito = Number(o.deposito) || CD_ORIGEM_PADRAO;
+    return {
+      idSku: `${deposito}-${codigo}`, // CALCULADO (era fórmula ID na planilha)
       deposito,
       codigoProduto: codigo,
-      produto: str(pick(row, A.produto)),
-      estoqueDisponivel: num(pick(row, A.disp)),
-      estoqueObjetivo: num(pick(row, A.objetivo)),
-      quantidadePendente: num(pick(row, A.pendente)),
-      vendaMedia3m: num(pick(row, A.vmed)),
-      custoReposicao: num(pick(row, A.custo)),
-      precoLista: num(pick(row, A.lista)),
-      embCompra: num(pick(row, A.emb)),
-      fornecedor: str(pick(row, A.fornecedor)),
-      comprador: str(pick(row, A.comprador)),
-      analista: str(pick(row, A.analista)),
-      categoriaN1: str(pick(row, A.cat1)),
-      categoriaN2: str(pick(row, A.cat2)),
-      categoriaN3: str(pick(row, A.cat3)),
-      categoriaN4: str(pick(row, A.cat4)),
-      flagAme: str(pick(row, A.ame)),
-      monitorado: str(pick(row, A.monit)),
-      marcaPropria: str(pick(row, A.marca)),
-      leadTime: num(pick(row, A.lead)),
-    });
-  }
-  return out;
+      produto: str(o.produto),
+      estoqueDisponivel: Number(o.estoqueDisponivel) || 0,
+      estoqueObjetivo: Number(o.estoqueObjetivo) || 0,
+      quantidadePendente: Number(o.quantidadePendente) || 0,
+      vendaMedia3m: Number(o.vendaMedia3m) || 0,
+      custoReposicao: Number(o.custoReposicao) || 0,
+      precoLista: Number(o.precoLista) || 0,
+      embCompra: Number(o.embCompra) || 0,
+      fornecedor: str(o.fornecedor),
+      comprador: str(o.comprador),
+      analista: str(o.analista),
+      categoriaN1: str(o.categoriaN1),
+      categoriaN2: str(o.categoriaN2),
+      categoriaN3: str(o.categoriaN3),
+      categoriaN4: str(o.categoriaN4),
+      flagAme: str(o.flagAme),
+      monitorado: str(o.monitorado),
+      marcaPropria: str(o.marcaPropria),
+      leadTime: Number(o.leadTime) || 0,
+    };
+  });
+  return { itens: out, diag };
 }
 
-export function parsePedidos(rows: Record<string, unknown>[]): PedidoProjetado[] {
-  const out: PedidoProjetado[] = [];
-  for (const row of rows) {
-    const anoMes = str(pick(row, P.anoMes));
-    const cd = Math.round(num(pick(row, P.cd)));
-    const codigo = Math.round(num(pick(row, P.codigo)));
-    if (!anoMes || !cd || !codigo) continue;
-    out.push({
-      anoMes,
-      cdDestino: cd,
-      codigoProduto: codigo,
-      pedido: num(pick(row, P.pedido)),
-      estoqueAtual: num(pick(row, P.estoqueAtual)),
-      estoqueProjetado: num(pick(row, P.estoqueProjetado)),
-      eo: num(pick(row, P.eo)),
-    });
-  }
-  return out;
+export function parsePedidos(rows: Record<string, unknown>[]): { itens: PedidoProjetado[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(rows, SCHEMA_PEDIDOS);
+  const out: PedidoProjetado[] = itens.map((o) => ({
+    anoMes: str(o.anoMes),
+    cdDestino: Number(o.cdDestino),
+    codigoProduto: Number(o.codigoProduto),
+    pedido: Number(o.pedido) || 0,
+    estoqueAtual: Number(o.estoqueAtual) || 0,
+    estoqueProjetado: Number(o.estoqueProjetado) || 0,
+    eo: Number(o.eo) || 0,
+  }));
+  return { itens: out, diag };
 }

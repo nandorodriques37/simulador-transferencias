@@ -6,8 +6,7 @@ import { usePathname } from "next/navigation";
 const ITENS = [
   { href: "/", label: "Dashboard", icon: "▦", desc: "Visão executiva" },
   { href: "/plano", label: "Plano de transferência", icon: "▤", desc: "Detalhe por SKU" },
-  { href: "/simulador", label: "Simulador de cenários", icon: "⇄", desc: "Base vs. simulado" },
-  { href: "/parametros", label: "Parâmetros e importação", icon: "⚙", desc: "Config + upload" },
+  { href: "/parametros", label: "Parâmetros e cenários", icon: "⚙", desc: "Config · simulação · upload" },
   { href: "/aprovacao", label: "Aprovação / execução", icon: "✓", desc: "Ordem para ERP/WMS" },
 ];
 

@@ -96,7 +96,8 @@ export function calcular(
 ): ResultadoCalculo {
   const t0 = Date.now();
   const meses = params.horizonteMeses;
-  const cds = params.prioridadeCds;
+  // Destinos = prioridade, sempre excluindo o CD de origem (não transfere para si).
+  const cds = params.prioridadeCds.filter((cd) => cd !== params.cdOrigem);
   const nMes = meses.length;
   const nCd = cds.length;
   const nBaldes = nMes * nCd;

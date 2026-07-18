@@ -65,6 +65,7 @@ interface EstadoStore {
 
 export function hashParams(p: Parametros): string {
   const s = JSON.stringify({
+    origem: p.cdOrigem,
     cds: p.prioridadeCds,
     meses: p.horizonteMeses,
     aliq: Object.entries(p.aliquotaFiscal).sort(),
