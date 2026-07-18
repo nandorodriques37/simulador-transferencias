@@ -21,6 +21,7 @@ interface Linha {
   valorTransfMes: number[];
   transfCaixasMes: number[];
   qtdTransfImediata: number;
+  imediataCaixas: number;
   valorTransfImediata: number;
   qtdImediataArredondada: number;
   coberturaDias: number;
@@ -92,7 +93,7 @@ export default function PlanoPage() {
     overscan: 12,
   });
 
-  const nCols = 8 + meses.length * 4; // aproximação para colspan
+  const nCols = 9 + meses.length * 4; // aproximação para colspan
 
   return (
     <div>
@@ -142,6 +143,7 @@ export default function PlanoPage() {
                 {meses.map((m) => <th key={"c" + m} className="th border-b border-slate-200 text-right">Cx {rotuloMes(m)}</th>)}
                 {meses.map((m) => <th key={"v" + m} className="th border-b border-slate-200 text-right">R$ {rotuloMes(m)}</th>)}
                 <th className="th border-b border-slate-200 text-right">Qtd imed.</th>
+                <th className="th border-b border-slate-200 text-right">Qtd imed. (cx)</th>
                 <th className="th border-b border-slate-200 text-right">R$ imed.</th>
                 <th className="th border-b border-slate-200 text-right">Preço un.</th>
                 <th className="th border-b border-slate-200 text-right">Cobertura</th>
@@ -168,6 +170,7 @@ export default function PlanoPage() {
                         {l.transfCaixasMes.map((c, i) => <td key={i} className="td text-right text-slate-500">{fmtInt(c)}</td>)}
                         {l.valorTransfMes.map((v, i) => <td key={i} className="td text-right">{fmtRs(v)}</td>)}
                         <td className="td text-right">{fmtInt(l.qtdTransfImediata)}</td>
+                        <td className="td text-right text-slate-500">{fmtInt(l.imediataCaixas)}</td>
                         <td className="td text-right">{fmtRs(l.valorTransfImediata)}</td>
                         <td className="td text-right text-slate-500">{fmtRs(l.precoUnitario)}</td>
                         <td className="td text-right">{l.coberturaDias >= 9999 ? "sem giro" : `${Math.round(l.coberturaDias)}d`}</td>

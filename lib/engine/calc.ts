@@ -12,7 +12,6 @@ import {
 
 // Excel-compatíveis (valores sempre >= 0 no modelo).
 const round = (x: number) => Math.floor(x + 0.5); // ROUND (half away from zero, x>=0)
-const roundUp = (x: number) => Math.ceil(x - 1e-9); // ROUNDUP
 const roundDown = (x: number) => Math.floor(x + 1e-9); // ROUNDDOWN
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 
@@ -203,13 +202,14 @@ export function calcular(
       const transfM1 = transfMes[0] ?? 0;
       const qtdImediata = Math.min(transfM1, dispHoje);
       const valorImediata = qtdImediata * preco;
+      // Transferência imediata em CAIXAS (cx): arredonda SEMPRE PARA BAIXO
+      // (caixa fechada). Se a quantidade imediata não fecha 1 caixa
+      // (qtdImediata < embCompra), a transferência imediata em cx é ZERO —
+      // ROUNDDOWN(qtd/emb) já entrega 0 nesse caso.
       let imediataCaixas = 0;
       let qtdImediataArred = 0;
       if (sku.embCompra > 0 && qtdImediata > 0) {
-        imediataCaixas = Math.min(
-          roundUp(qtdImediata / sku.embCompra),
-          roundDown(dispHoje / sku.embCompra),
-        );
+        imediataCaixas = roundDown(qtdImediata / sku.embCompra);
         if (imediataCaixas < 0) imediataCaixas = 0;
         qtdImediataArred = imediataCaixas * sku.embCompra;
       }
