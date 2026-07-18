@@ -1,0 +1,23 @@
+name: CI
+
+# Gate de qualidade: roda em todo Pull Request e em todo push para main.
+# Combinado com "branch protection" (exigir este check + aprovação) no GitHub,
+# garante que só entra em main — e portanto no deploy de produção do Vercel —
+# código que passou nos testes do motor e no build.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

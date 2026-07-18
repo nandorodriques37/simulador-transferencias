@@ -102,6 +102,25 @@ npm run dev        # local em http://localhost:3000
    aplicação roda em **modo demonstração** com uma base sintética em memória
    (`lib/data/seed.ts`) — funcional para avaliação, porém efêmera por instância.
 
+### Pipeline: PR aprovado → app publicado
+
+O deploy contínuo é feito pela **integração Git nativa do Vercel** (não precisa
+de workflow de deploy próprio):
+
+1. No Vercel, em *Settings → Git*, defina **Production Branch = `main`**.
+2. Toda vez que um PR é **mergeado em `main`**, o Vercel dispara o **deploy de
+   produção** automaticamente. Cada PR aberto também ganha um **Preview
+   Deployment** com URL própria para revisão.
+3. Para exigir **aprovação** antes do merge, ative no GitHub
+   *Settings → Branches → Branch protection rule* para `main`:
+   *Require a pull request before merging* + *Require approvals* +
+   *Require status checks to pass* → selecione o check **CI / test-build**
+   (definido em `.github/workflows/ci.yml`, que roda `npm test` e `npm run build`
+   em todo PR).
+
+Com isso o fluxo fica: **PR → CI verde + aprovação → merge em `main` → deploy de
+produção no Vercel**.
+
 > **Autenticação (SSO):** `lib/auth.ts` é um stub pronto para o SSO corporativo
 > (lê `x-user-email`). Em produção, plugue o provedor (ex.: Azure AD via
 > NextAuth) mantendo a trilha de auditoria já existente.
