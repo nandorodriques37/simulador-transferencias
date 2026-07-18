@@ -24,6 +24,7 @@ const MESES = ["2026_07", "2026_08", "2026_09"];
 const CDS = [1, 9, 2, 8, 7];
 
 const paramsBase: Parametros = {
+  cdOrigem: 10,
   prioridadeCds: CDS,
   horizonteMeses: MESES,
   aliquotaFiscal: { 1: 0.052, 9: 0.015 }, // CD2/8/7 indefinidos
@@ -189,6 +190,30 @@ describe("casos de borda", () => {
     expect(l.imediataCaixas).toBe(6);
     expect(l.qtdImediataArredondada).toBe(60);
     expect(l.valorTransfImediata).toBe(120);
+  });
+});
+
+describe("CDs configuráveis (origem e destinos)", () => {
+  it("exclui o CD de origem da lista de destinos", () => {
+    const posicao = [sku({ estoqueDisponivel: 1000, custoReposicao: 1 })];
+    const pedidos: PedidoProjetado[] = [
+      { anoMes: MESES[0], cdDestino: 10, codigoProduto: 1, pedido: 500 }, // origem — deve ser ignorado
+      { anoMes: MESES[0], cdDestino: 3, codigoProduto: 1, pedido: 200 },
+    ];
+    // prioridade inclui o próprio 10 por engano + um CD novo (3)
+    const res = calcular(posicao, indexarPedidos(pedidos), { ...paramsBase, prioridadeCds: [10, 3, 1] });
+    expect(res.resumo.some((r) => r.cdDestino === 10)).toBe(false);
+    const cd3 = res.linhas.find((l) => l.cdDestino === 3)!;
+    expect(cd3.transfMes[0]).toBe(200);
+  });
+
+  it("suporta rede maior (11 CDs) sem código fixo", () => {
+    const destinos = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11];
+    const posicao = [sku({ estoqueDisponivel: 100000, custoReposicao: 1 })];
+    const pedidos: PedidoProjetado[] = destinos.map((cd) => ({ anoMes: MESES[0], cdDestino: cd, codigoProduto: 1, pedido: 10 }));
+    const res = calcular(posicao, indexarPedidos(pedidos), { ...paramsBase, cdOrigem: 10, prioridadeCds: destinos });
+    expect(res.resumo.length).toBe(10);
+    expect(res.linhas.length).toBe(10);
   });
 });
 

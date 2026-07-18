@@ -127,6 +127,34 @@ produção no Vercel**.
 
 ---
 
+## 🔁 Cobertura de fórmulas, CDs configuráveis e validação precisa
+
+**A base anexada NÃO precisa conter nenhuma coluna de fórmula** da planilha
+original. O esquema canônico de entrada está em `lib/data/schema.ts`: o app lê
+apenas as **colunas cruas** (ERP/forecast) e **recalcula tudo** que era fórmula.
+O mapeamento fórmula → regra do motor está documentado em
+`CAMPOS_CALCULADOS` (mesmo arquivo):
+
+| Coluna de fórmula na planilha | Como o app calcula |
+|---|---|
+| `ID (dep+cod)` | `deposito + '-' + codigo` |
+| `EXCESSO EM STK` / `EXCESSOS + PEND` | REGRA 2 |
+| `PEDIDOS <mês> CD x` (XLOOKUP) | REGRA 3 — join indexado em pedidos |
+| `TRANSF...` / `SOBRA 1/2/3` | REGRA 4 — cascata cumsum-clamp |
+| `Valor Transf.` / `Qtd Imediata` / `(cx)` | REGRAS 5–6 |
+| `Status Cobertura` / `Impacto fiscal` | REGRAS 7–8 |
+
+**CDs configuráveis (rede de 11 CDs):** origem e destinos não são fixos. Em
+*Parâmetros* e no *Simulador* dá para **escolher o CD de origem** e
+**adicionar/remover/reordenar** os CDs de destino (com alíquota por rota) —
+qualquer quantidade. O motor sempre exclui a origem dos destinos. Os CDs
+presentes nas bases são descobertos em `/api/cds`.
+
+**Validação com erro exato (melhoria #3):** a importação aponta precisamente o
+problema — nome da **coluna obrigatória ausente** (com os nomes aceitos), e
+**linha + coluna + valor** de cada célula inválida (não numérica ou negativa),
+além de chaves duplicadas. Nada de erro silencioso.
+
 ## 📁 Estrutura
 
 ```

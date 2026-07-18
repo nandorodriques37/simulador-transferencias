@@ -2,15 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Alert, PageHeader, Spinner } from "@/components/ui";
+import { CdManager, Parametros } from "@/components/CdManager";
 import { corCd, fmtInt, fmtRs, rotuloMes } from "@/lib/format";
 
-interface Parametros {
-  prioridadeCds: number[];
-  horizonteMeses: string[];
-  aliquotaFiscal: Record<number, number>;
-  fatorSegurancaImediata: number;
-  limiteCoberturaDias: number;
-}
 interface ResumoSim {
   valorTransfTotal: number; valorImediata: number; impactoFiscal: number; linhas: number;
   porCd: { cd: number; valorTotal: number; valorImediata: number; impactoFiscal: number; qtdImediata: number }[];
@@ -24,13 +18,14 @@ interface SimResp {
 
 export default function Simulador() {
   const [params, setParams] = useState<Parametros | null>(null);
+  const [disponiveis, setDisponiveis] = useState<number[]>([]);
   const [res, setRes] = useState<SimResp | null>(null);
   const [rodando, setRodando] = useState(false);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [cenarios, setCenarios] = useState<{ id: string; nome: string; criadoEm: string }[]>([]);
 
   useEffect(() => {
     fetch("/api/params").then((r) => r.json()).then((d) => setParams(d.parametros));
+    fetch("/api/cds").then((r) => r.json()).then((d) => setDisponiveis(d.todos ?? []));
     carregarCenarios();
   }, []);
 
@@ -39,14 +34,6 @@ export default function Simulador() {
   if (!params) return <div className="pt-10"><Spinner label="Carregando parâmetros…" /></div>;
 
   const setP = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
-
-  const moverPara = (from: number, to: number) => {
-    if (to < 0 || to >= params.prioridadeCds.length) return;
-    const arr = [...params.prioridadeCds];
-    const [x] = arr.splice(from, 1);
-    arr.splice(to, 0, x);
-    setP({ prioridadeCds: arr });
-  };
 
   const simular = async (salvarComo?: string) => {
     setRodando(true);
@@ -83,48 +70,9 @@ export default function Simulador() {
 
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         <div className="card p-4">
-          <div className="mb-2 text-sm font-semibold text-slate-700">Prioridade dos CDs (arraste para reordenar)</div>
-          <ul className="mb-4 space-y-1">
-            {params.prioridadeCds.map((cd, i) => (
-              <li
-                key={cd}
-                draggable
-                onDragStart={() => setDragIdx(i)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => { if (dragIdx !== null) moverPara(dragIdx, i); setDragIdx(null); }}
-                className="flex cursor-grab items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
-              >
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <span className="text-slate-400">⋮⋮</span>
-                  <span className="badge" style={{ background: corCd(cd) + "22", color: corCd(cd) }}>CD {cd}</span>
-                  <span className="text-slate-400">#{i + 1}</span>
-                </span>
-                <span className="flex gap-1">
-                  <button className="btn-ghost px-2 py-1" onClick={() => moverPara(i, i - 1)}>↑</button>
-                  <button className="btn-ghost px-2 py-1" onClick={() => moverPara(i, i + 1)}>↓</button>
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <div className="mb-2 text-sm font-semibold text-slate-700">Alíquotas fiscais (ICMS) por CD</div>
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            {params.prioridadeCds.map((cd) => (
-              <label key={cd} className="text-sm">
-                <span className="label">CD {cd} (%)</span>
-                <input
-                  type="number" step="0.1" className="input mt-1 w-full"
-                  value={params.aliquotaFiscal[cd] != null ? (params.aliquotaFiscal[cd] * 100).toString() : ""}
-                  placeholder="a definir"
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const aliq = { ...params.aliquotaFiscal };
-                    if (v === "") delete aliq[cd]; else aliq[cd] = Number(v) / 100;
-                    setP({ aliquotaFiscal: aliq });
-                  }}
-                />
-              </label>
-            ))}
+          <div className="mb-3 text-sm font-semibold text-slate-700">CDs e prioridade</div>
+          <div className="mb-4">
+            <CdManager params={params} disponiveis={disponiveis} onChange={setParams} />
           </div>
 
           <div className="grid grid-cols-2 gap-2">

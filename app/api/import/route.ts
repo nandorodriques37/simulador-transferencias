@@ -28,22 +28,28 @@ export async function POST(req: NextRequest) {
 
   let posicao: PosicaoEstoque[] = store.getPosicao();
   let pedidos: PedidoProjetado[] = store.getPedidos();
+  let diagPosicao;
+  let diagPedidos;
   const origens: string[] = [];
 
   try {
     if (posicaoFile) {
-      posicao = parsePosicao(await lerPlanilha(posicaoFile));
+      const r = parsePosicao(await lerPlanilha(posicaoFile));
+      posicao = r.itens;
+      diagPosicao = r.diag;
       origens.push(posicaoFile.name);
     }
     if (pedidosFile) {
-      pedidos = parsePedidos(await lerPlanilha(pedidosFile));
+      const r = parsePedidos(await lerPlanilha(pedidosFile));
+      pedidos = r.itens;
+      diagPedidos = r.diag;
       origens.push(pedidosFile.name);
     }
   } catch (e) {
     return NextResponse.json({ erro: `falha ao ler planilha: ${(e as Error).message}` }, { status: 400 });
   }
 
-  const relatorio = validarImportacao(posicao, pedidos);
+  const relatorio = validarImportacao(posicao, pedidos, diagPosicao, diagPedidos);
   const origem = origens.join(" + ") || "importação";
 
   if (dryRun) {

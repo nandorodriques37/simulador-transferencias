@@ -2,15 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, PageHeader, Progress, Spinner } from "@/components/ui";
+import { CdManager, Parametros } from "@/components/CdManager";
 import { fmtInt, rotuloMes } from "@/lib/format";
 
-interface Parametros {
-  prioridadeCds: number[];
-  horizonteMeses: string[];
-  aliquotaFiscal: Record<number, number>;
-  fatorSegurancaImediata: number;
-  limiteCoberturaDias: number;
-}
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { posicaoLinhas: number; pedidosLinhas: number; achados: Achado[]; ok: boolean }
 interface ImportLog { id: string; em: string; por: string; origem: string; posicaoLinhas: number; pedidosLinhas: number; relatorio: Relatorio }
@@ -18,6 +12,7 @@ interface Hist { version: number; criadoEm: string; criadoPor: string; hash: str
 
 export default function ParametrosPage() {
   const [params, setParams] = useState<Parametros | null>(null);
+  const [disponiveis, setDisponiveis] = useState<number[]>([]);
   const [hist, setHist] = useState<Hist[]>([]);
   const [salvando, setSalvando] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -34,6 +29,7 @@ export default function ParametrosPage() {
   const carregar = () => {
     fetch("/api/params").then((r) => r.json()).then((d) => { setParams(d.parametros); setHist(d.historico); });
     fetch("/api/importlog").then((r) => r.json()).then((d) => setLog(d.importLog));
+    fetch("/api/cds").then((r) => r.json()).then((d) => setDisponiveis(d.todos ?? []));
   };
   useEffect(carregar, []);
 
@@ -100,25 +96,8 @@ export default function ParametrosPage() {
             <button className="btn-primary" onClick={salvar} disabled={salvando}>{salvando ? "Salvando…" : "Salvar (nova versão)"}</button>
           </div>
 
-          <div className="mb-3">
-            <span className="label">Prioridade dos CDs</span>
-            <input className="input mt-1 w-full" value={params.prioridadeCds.join(", ")}
-              onChange={(e) => setP({ prioridadeCds: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => !isNaN(n)) })} />
-          </div>
-
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            {params.prioridadeCds.map((cd) => (
-              <label key={cd} className="text-sm">
-                <span className="label">Alíquota CD {cd} (%)</span>
-                <input type="number" step="0.1" className="input mt-1 w-full" placeholder="a definir"
-                  value={params.aliquotaFiscal[cd] != null ? (params.aliquotaFiscal[cd] * 100).toString() : ""}
-                  onChange={(e) => {
-                    const v = e.target.value; const aliq = { ...params.aliquotaFiscal };
-                    if (v === "") delete aliq[cd]; else aliq[cd] = Number(v) / 100;
-                    setP({ aliquotaFiscal: aliq });
-                  }} />
-              </label>
-            ))}
+          <div className="mb-4">
+            <CdManager params={params} disponiveis={disponiveis} onChange={setParams} />
           </div>
 
           <div className="mb-3 grid grid-cols-2 gap-2">
