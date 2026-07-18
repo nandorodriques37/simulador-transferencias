@@ -27,11 +27,12 @@ export function rotuloMes(anoMes: string): string {
   return `${nomes[mes] ?? mes}/${ano?.slice(2) ?? ""}`;
 }
 
+// Paleta Pague Menos — azul e vermelho institucionais em destaque
 export const CD_CORES: Record<number, string> = {
-  1: "#2563eb",
+  1: "#0000be",
   9: "#16a34a",
   2: "#f59e0b",
-  8: "#db2777",
+  8: "#ff2342",
   7: "#7c3aed",
 };
 export const corCd = (cd: number) => CD_CORES[cd] ?? "#64748b";

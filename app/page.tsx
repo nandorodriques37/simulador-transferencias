@@ -123,7 +123,7 @@ export default function Dashboard() {
               <YAxis tickFormatter={(v) => fmtRsCompacto(v)} tick={{ fontSize: 11 }} width={70} />
               <Tooltip formatter={(v: number) => fmtRs(v)} />
               <Legend />
-              <Bar dataKey="valor" name="Valor transferido" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="valor" name="Valor transferido" fill="#0000be" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

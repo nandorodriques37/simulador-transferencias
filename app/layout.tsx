@@ -3,8 +3,11 @@ import "./globals.css";
 import { Nav } from "@/components/Nav";
 
 export const metadata: Metadata = {
-  title: "Transferências entre CDs — Otimização de Excesso",
+  title: "Pague Menos — Transferências entre CDs",
   description: "Planejamento de transferências de excesso do CD10 para abater pedidos projetados (DRP) dos demais CDs.",
+  icons: {
+    icon: "/pague-menos-icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
