@@ -47,6 +47,23 @@ body {
   .td {
     @apply px-3 py-2 text-sm text-slate-700 whitespace-nowrap;
   }
+  /* Tabela compacta do Plano de transferência */
+  .gh {
+    @apply px-2.5 py-1 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap;
+  }
+  .thc {
+    @apply px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap;
+  }
+  .tdc {
+    @apply px-2.5 py-1 text-[13px] leading-5 text-slate-700 whitespace-nowrap;
+  }
+  .num {
+    @apply text-right tabular-nums;
+  }
+  /* separador vertical entre grupos de colunas */
+  .grp {
+    @apply border-l border-slate-200;
+  }
 }
 
 /* Barra de rolagem discreta para a tabela do plano */
