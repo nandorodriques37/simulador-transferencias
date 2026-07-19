@@ -49,13 +49,13 @@ body {
   }
   /* Tabela compacta do Plano de transferência */
   .gh {
-    @apply px-2.5 py-1 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap;
+    @apply px-2 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap;
   }
   .thc {
-    @apply px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap;
+    @apply px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap;
   }
   .tdc {
-    @apply px-2.5 py-1 text-[13px] leading-5 text-slate-700 whitespace-nowrap;
+    @apply px-2 py-0.5 text-[11px] leading-4 text-slate-700 whitespace-nowrap;
   }
   .num {
     @apply text-right tabular-nums;

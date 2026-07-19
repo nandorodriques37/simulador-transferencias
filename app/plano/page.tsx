@@ -32,7 +32,7 @@ interface Facets {
   cds: number[]; categorias: string[]; fornecedores: string[]; compradores: string[]; analistas: string[]; status: string[];
 }
 interface Resp {
-  meses: string[]; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
+  meses: string[]; cdOrigem?: number; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
 }
 
 const emptyFacets: Facets = { cds: [], categorias: [], fornecedores: [], compradores: [], analistas: [], status: [] };
@@ -83,14 +83,15 @@ export default function PlanoPage() {
 
   const facets = data?.facets ?? emptyFacets;
   const meses = data?.meses ?? [];
+  const cdOrigem = data?.cdOrigem;
   const itens = data?.itens ?? [];
 
   const parentRef = useRef<HTMLDivElement>(null);
   const rowVirt = useVirtualizer({
     count: itens.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 38,
-    overscan: 12,
+    estimateSize: () => 26,
+    overscan: 16,
   });
 
   const rot = meses.map(rotuloMes);
@@ -158,7 +159,7 @@ export default function PlanoPage() {
                 <th className="thc num border-b border-slate-200 bg-brand-50/60">Un. a transferir</th>
                 <th className="thc num border-b border-slate-200 bg-brand-50/60">Valor R$</th>
                 <th className="thc num border-b border-slate-200 grp">Preço un.</th>
-                <th className="thc num border-b border-slate-200">Cobertura</th>
+                <th className="thc num border-b border-slate-200" title="Cobertura de estoque no CD de origem (dias)">Cob. CD orig.{cdOrigem != null ? ` ${cdOrigem}` : ""}</th>
                 <th className="thc border-b border-slate-200">Status</th>
               </tr>
             </thead>
@@ -224,6 +225,10 @@ function Sel({ label, value, onChange, opts }: { label: string; value: string; o
 }
 
 function StatusBadge({ s }: { s: string }) {
-  const cor = s.startsWith("Acima") ? "bg-rose-100 text-rose-700" : s === "Sem giro" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
-  return <span className={`badge ${cor}`}>{s}</span>;
+  const acima = s.startsWith("Acima");
+  const semGiro = s === "Sem giro";
+  const cor = acima ? "bg-rose-100 text-rose-700" : semGiro ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+  const dias = s.match(/\d+/)?.[0];
+  const label = semGiro ? "sem giro" : acima ? `> ${dias}d` : `≤ ${dias}d`;
+  return <span className={`inline-flex items-center rounded px-1.5 text-[10px] font-medium ${cor}`} title={s}>{label}</span>;
 }

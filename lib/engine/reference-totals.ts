@@ -7,6 +7,12 @@
 // ao centavo, gerando 8.926 linhas de plano em ~250 ms. Mantidos aqui como
 // referência de não-regressão do modelo. Apenas agregados de negócio —
 // nenhum dado de SKU/preço individual é versionado no repositório.
+//
+// NOTA (valorImediata / qtdImediata): estes agregados refletem a quantidade
+// imediata TEÓRICA da planilha original. A partir da regra de caixa fechada,
+// o valor da transferência imediata do plano passou a ser o valor das UNIDADES
+// efetivamente transferidas (caixas fechadas, arredondadas para baixo), então
+// o agregado atual do motor fica ligeiramente ABAIXO destes valores teóricos.
 // ---------------------------------------------------------------------------
 
 export const REFERENCIA_RESUMO = {

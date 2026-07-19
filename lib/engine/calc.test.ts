@@ -202,6 +202,8 @@ describe("casos de borda", () => {
     expect(l.qtdTransfImediata).toBe(60);
     expect(l.imediataCaixas).toBe(2);
     expect(l.qtdImediataArredondada).toBe(50);
+    // valor imediato = unidades a transferir (50) * preço (2)
+    expect(l.valorTransfImediata).toBe(100);
   });
 
   it("quantidade imediata menor que 1 caixa => imediata em cx é ZERO", () => {
@@ -214,6 +216,8 @@ describe("casos de borda", () => {
     expect(l.qtdTransfImediata).toBe(30);
     expect(l.imediataCaixas).toBe(0);
     expect(l.qtdImediataArredondada).toBe(0);
+    // sem caixa fechada => nada a transferir => valor imediato zero
+    expect(l.valorTransfImediata).toBe(0);
   });
 });
 

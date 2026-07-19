@@ -201,7 +201,6 @@ export function calcular(
       // REGRA 5/6 — transferência imediata (mês 1 deste CD).
       const transfM1 = transfMes[0] ?? 0;
       const qtdImediata = Math.min(transfM1, dispHoje);
-      const valorImediata = qtdImediata * preco;
       // Transferência imediata em CAIXAS (cx): arredonda SEMPRE PARA BAIXO
       // (caixa fechada). Se a quantidade imediata não fecha 1 caixa
       // (qtdImediata < embCompra), a transferência imediata em cx é ZERO —
@@ -213,6 +212,10 @@ export function calcular(
         if (imediataCaixas < 0) imediataCaixas = 0;
         qtdImediataArred = imediataCaixas * sku.embCompra;
       }
+      // Valor da transferência imediata = valor das UNIDADES efetivamente
+      // transferidas em caixas fechadas (qtdImediataArred), e não da
+      // quantidade teórica não arredondada.
+      const valorImediata = qtdImediataArred * preco;
 
       const r = resumoMap.get(cd)!;
       for (let m = 0; m < nMes; m++) {
