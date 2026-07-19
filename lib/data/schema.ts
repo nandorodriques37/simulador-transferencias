@@ -69,7 +69,8 @@ export const CAMPOS_CALCULADOS: { campo: string; origemPlanilha: string; regra: 
   { campo: "sobra_mes", origemPlanilha: "SOBRA 1/2/3", regra: "REGRA 4 — saldo do excesso após os CDs de cada mês" },
   { campo: "valor_transf", origemPlanilha: "Valor Transf. <mês> (R$)", regra: "REGRA 5 — transf * preco" },
   { campo: "qtd_transf_imediata", origemPlanilha: "Qtd Transf. Imediata", regra: "REGRA 5/6 — MIN(transf_m1, disp - venda_media*fator_seguranca)" },
-  { campo: "caixas", origemPlanilha: "Transf. (cx) / Imediata (cx)", regra: "REGRA 6 — arredondamento por embalagem de compra" },
+  { campo: "imediata_caixas", origemPlanilha: "Transf. Imediata (cx)", regra: "REGRA 6 — ROUNDDOWN(qtd_imediata / emb_compra); < 1 caixa => 0" },
+  { campo: "caixas", origemPlanilha: "Transf. <mês> (cx)", regra: "REGRA 6 — arredondamento por embalagem de compra" },
   { campo: "cobertura_dias", origemPlanilha: "Status Cobertura (>90d)", regra: "REGRA 7 — (disp+pend)*30/venda_media" },
   { campo: "impacto_fiscal", origemPlanilha: "Impacto fiscal", regra: "REGRA 8 — soma(valor_transf no horizonte) * aliquota[cd]" },
 ];

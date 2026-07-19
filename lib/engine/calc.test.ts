@@ -181,7 +181,7 @@ describe("casos de borda", () => {
   it("transferência imediata respeita fator de segurança e caixa fechada", () => {
     // disp=100, vmed=40, fs=0.5 => dispHoje = 100 - 20 = 80
     // transfM1 = min(pedido 90, excesso). excesso = 100+0-40-0 = 60 => transfM1=60
-    // qtdImediata = min(60, 80) = 60 ; emb=10 => caixas = min(ceil(6), floor(8)) = 6 => 60
+    // qtdImediata = min(60, 80) = 60 ; emb=10 => caixas = ROUNDDOWN(60/10) = 6 => 60
     const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 10 })];
     const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 90 }];
     const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
@@ -190,6 +190,34 @@ describe("casos de borda", () => {
     expect(l.imediataCaixas).toBe(6);
     expect(l.qtdImediataArredondada).toBe(60);
     expect(l.valorTransfImediata).toBe(120);
+  });
+
+  it("transferência imediata em caixas arredonda PARA BAIXO (caixa fechada)", () => {
+    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60 => transfM1=60
+    // qtdImediata = min(60, 80) = 60 ; emb=25 => ROUNDDOWN(60/25) = 2 (não 3) => 50
+    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 25 })];
+    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 90 }];
+    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
+    const l = res.linhas[0];
+    expect(l.qtdTransfImediata).toBe(60);
+    expect(l.imediataCaixas).toBe(2);
+    expect(l.qtdImediataArredondada).toBe(50);
+    // valor imediato = unidades a transferir (50) * preço (2)
+    expect(l.valorTransfImediata).toBe(100);
+  });
+
+  it("quantidade imediata menor que 1 caixa => imediata em cx é ZERO", () => {
+    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60 => transfM1 = min(30,60)=30
+    // qtdImediata = min(30, 80) = 30 ; emb=50 => 30 < 50 => ROUNDDOWN(30/50) = 0
+    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 50 })];
+    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 30 }];
+    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
+    const l = res.linhas[0];
+    expect(l.qtdTransfImediata).toBe(30);
+    expect(l.imediataCaixas).toBe(0);
+    expect(l.qtdImediataArredondada).toBe(0);
+    // sem caixa fechada => nada a transferir => valor imediato zero
+    expect(l.valorTransfImediata).toBe(0);
   });
 });
 

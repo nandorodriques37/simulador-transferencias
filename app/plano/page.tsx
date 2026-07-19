@@ -21,6 +21,7 @@ interface Linha {
   valorTransfMes: number[];
   transfCaixasMes: number[];
   qtdTransfImediata: number;
+  imediataCaixas: number;
   valorTransfImediata: number;
   qtdImediataArredondada: number;
   coberturaDias: number;
@@ -31,7 +32,7 @@ interface Facets {
   cds: number[]; categorias: string[]; fornecedores: string[]; compradores: string[]; analistas: string[]; status: string[];
 }
 interface Resp {
-  meses: string[]; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
+  meses: string[]; cdOrigem?: number; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
 }
 
 const emptyFacets: Facets = { cds: [], categorias: [], fornecedores: [], compradores: [], analistas: [], status: [] };
@@ -82,17 +83,19 @@ export default function PlanoPage() {
 
   const facets = data?.facets ?? emptyFacets;
   const meses = data?.meses ?? [];
+  const cdOrigem = data?.cdOrigem;
   const itens = data?.itens ?? [];
 
   const parentRef = useRef<HTMLDivElement>(null);
   const rowVirt = useVirtualizer({
     count: itens.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 38,
-    overscan: 12,
+    estimateSize: () => 26,
+    overscan: 16,
   });
 
-  const nCols = 8 + meses.length * 4; // aproximação para colspan
+  const rot = meses.map(rotuloMes);
+  const nCols = 11 + meses.length * 3; // colspan total (loading / vazio)
 
   return (
     <div>
@@ -130,50 +133,62 @@ export default function PlanoPage() {
       </div>
 
       <div className="card overflow-hidden">
-        <div ref={parentRef} className="thin-scroll max-h-[calc(100vh-320px)] overflow-auto">
+        <div ref={parentRef} className="thin-scroll max-h-[calc(100vh-300px)] overflow-auto">
           <table className="min-w-full border-separate border-spacing-0">
             <thead className="sticky top-0 z-10 bg-slate-50">
-              <tr>
-                <th className="th border-b border-slate-200">CD</th>
-                <th className="th border-b border-slate-200">Cód.</th>
-                <th className="th border-b border-slate-200">Produto</th>
-                <th className="th border-b border-slate-200">Fornecedor</th>
-                {meses.map((m) => <th key={"t" + m} className="th border-b border-slate-200 text-right">Transf {rotuloMes(m)}</th>)}
-                {meses.map((m) => <th key={"c" + m} className="th border-b border-slate-200 text-right">Cx {rotuloMes(m)}</th>)}
-                {meses.map((m) => <th key={"v" + m} className="th border-b border-slate-200 text-right">R$ {rotuloMes(m)}</th>)}
-                <th className="th border-b border-slate-200 text-right">Qtd imed.</th>
-                <th className="th border-b border-slate-200 text-right">R$ imed.</th>
-                <th className="th border-b border-slate-200 text-right">Preço un.</th>
-                <th className="th border-b border-slate-200 text-right">Cobertura</th>
-                <th className="th border-b border-slate-200">Status</th>
+              {/* linha de grupos */}
+              <tr className="bg-slate-100/70">
+                <th className="gh" colSpan={4}>SKU</th>
+                <th className="gh grp" colSpan={meses.length}>Transferência (un)</th>
+                <th className="gh grp" colSpan={meses.length}>Caixas (cx)</th>
+                <th className="gh grp" colSpan={meses.length}>Valor (R$)</th>
+                <th className="gh grp bg-brand-50 text-brand-700" colSpan={4}>Transferência imediata</th>
+                <th className="gh grp" colSpan={3}>Indicadores</th>
+              </tr>
+              {/* linha de colunas */}
+              <tr className="border-b border-slate-200">
+                <th className="thc border-b border-slate-200">CD</th>
+                <th className="thc border-b border-slate-200">Cód.</th>
+                <th className="thc border-b border-slate-200">Produto</th>
+                <th className="thc border-b border-slate-200">Fornecedor</th>
+                {rot.map((m, i) => <th key={"t" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
+                {rot.map((m, i) => <th key={"c" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
+                {rot.map((m, i) => <th key={"v" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
+                <th className="thc num border-b border-slate-200 grp bg-brand-50/60">Qtd un.</th>
+                <th className="thc num border-b border-slate-200 bg-brand-50/60">Caixas</th>
+                <th className="thc num border-b border-slate-200 bg-brand-50/60">Un. a transferir</th>
+                <th className="thc num border-b border-slate-200 bg-brand-50/60">Valor R$</th>
+                <th className="thc num border-b border-slate-200 grp">Preço un.</th>
+                <th className="thc num border-b border-slate-200" title="Cobertura de estoque no CD de origem (dias)">Cob. CD orig.{cdOrigem != null ? ` ${cdOrigem}` : ""}</th>
+                <th className="thc border-b border-slate-200">Status</th>
               </tr>
             </thead>
             <tbody>
               {loading && itens.length === 0 ? (
-                <tr><td className="td py-6" colSpan={nCols}><Spinner label="Carregando plano…" /></td></tr>
+                <tr><td className="tdc py-6" colSpan={nCols}><Spinner label="Carregando plano…" /></td></tr>
               ) : itens.length === 0 ? (
-                <tr><td className="td py-6 text-slate-500" colSpan={nCols}>Nenhuma linha para os filtros atuais.</td></tr>
+                <tr><td className="tdc py-6 text-slate-500" colSpan={nCols}>Nenhuma linha para os filtros atuais.</td></tr>
               ) : (
                 <>
                   <tr style={{ height: rowVirt.getVirtualItems()[0]?.start ?? 0 }} />
                   {rowVirt.getVirtualItems().map((vi) => {
                     const l = itens[vi.index];
                     return (
-                      <tr key={l.idSku + l.cdDestino} data-index={vi.index} ref={rowVirt.measureElement} className="hover:bg-slate-50">
-                        <td className="td font-medium">CD {l.cdDestino}</td>
-                        <td className="td text-slate-500">{l.codigoProduto}</td>
-                        <td className="td max-w-[220px] truncate" title={l.produto}>{l.produto}</td>
-                        <td className="td text-slate-500">{l.fornecedor}</td>
-                        {l.transfMes.map((t, i) => <td key={i} className="td text-right">{fmtInt(t)}</td>)}
-                        {l.transfCaixasMes.map((c, i) => <td key={i} className="td text-right text-slate-500">{fmtInt(c)}</td>)}
-                        {l.valorTransfMes.map((v, i) => <td key={i} className="td text-right">{fmtRs(v)}</td>)}
-                        <td className="td text-right">{fmtInt(l.qtdTransfImediata)}</td>
-                        <td className="td text-right">{fmtRs(l.valorTransfImediata)}</td>
-                        <td className="td text-right text-slate-500">{fmtRs(l.precoUnitario)}</td>
-                        <td className="td text-right">{l.coberturaDias >= 9999 ? "sem giro" : `${Math.round(l.coberturaDias)}d`}</td>
-                        <td className="td">
-                          <StatusBadge s={l.statusCobertura} />
-                        </td>
+                      <tr key={l.idSku + l.cdDestino} data-index={vi.index} ref={rowVirt.measureElement} className={`${vi.index % 2 ? "bg-slate-50/50" : "bg-white"} hover:bg-brand-50/40`}>
+                        <td className="tdc font-semibold text-slate-900">CD {l.cdDestino}</td>
+                        <td className="tdc text-slate-400">{l.codigoProduto}</td>
+                        <td className="tdc max-w-[200px] truncate font-medium" title={l.produto}>{l.produto}</td>
+                        <td className="tdc max-w-[140px] truncate text-slate-500" title={l.fornecedor}>{l.fornecedor}</td>
+                        {l.transfMes.map((t, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtInt(t)}</td>)}
+                        {l.transfCaixasMes.map((c, i) => <td key={i} className={`tdc num text-slate-500 ${i === 0 ? "grp" : ""}`}>{fmtInt(c)}</td>)}
+                        {l.valorTransfMes.map((v, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtRs(v)}</td>)}
+                        <td className="tdc num grp bg-brand-50/30">{fmtInt(l.qtdTransfImediata)}</td>
+                        <td className="tdc num text-slate-500 bg-brand-50/30">{fmtInt(l.imediataCaixas)}</td>
+                        <td className="tdc num font-semibold text-brand-700 bg-brand-50/30">{fmtInt(l.qtdImediataArredondada)}</td>
+                        <td className="tdc num bg-brand-50/30">{fmtRs(l.valorTransfImediata)}</td>
+                        <td className="tdc num grp text-slate-400">{fmtRs(l.precoUnitario)}</td>
+                        <td className="tdc num">{l.coberturaDias >= 9999 ? "—" : `${Math.round(l.coberturaDias)}d`}</td>
+                        <td className="tdc"><StatusBadge s={l.statusCobertura} /></td>
                       </tr>
                     );
                   })}
@@ -210,6 +225,10 @@ function Sel({ label, value, onChange, opts }: { label: string; value: string; o
 }
 
 function StatusBadge({ s }: { s: string }) {
-  const cor = s.startsWith("Acima") ? "bg-rose-100 text-rose-700" : s === "Sem giro" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
-  return <span className={`badge ${cor}`}>{s}</span>;
+  const acima = s.startsWith("Acima");
+  const semGiro = s === "Sem giro";
+  const cor = acima ? "bg-rose-100 text-rose-700" : semGiro ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+  const dias = s.match(/\d+/)?.[0];
+  const label = semGiro ? "sem giro" : acima ? `> ${dias}d` : `≤ ${dias}d`;
+  return <span className={`inline-flex items-center rounded px-1.5 text-[10px] font-medium ${cor}`} title={s}>{label}</span>;
 }

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { CSSProperties, useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Alert, Kpi, PageHeader, Spinner } from "@/components/ui";
-import { corCd, fmtInt, fmtRs, fmtRs2, fmtRsCompacto, rotuloMes } from "@/lib/format";
+import { corCd, fmtInt, fmtPct, fmtRs, fmtRs2, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
 interface ResumoCd {
   cdDestino: number;
@@ -68,6 +68,13 @@ export default function Dashboard() {
   }));
   const chartMensal = meses.map((m, i) => ({ mes: rotuloMes(m), valor: kpis.valorTransfMes[i] }));
 
+  // Matriz: totais gerais + heatmap por célula de valor (CD × mês).
+  const totalQtdGeral = totalRow.transfMes.reduce((a, b) => a + b, 0);
+  const totalValorGeral = totalRow.valorMes.reduce((a, b) => a + b, 0);
+  const maxCelulaValor = Math.max(1, ...resumo.flatMap((r) => r.valorTransfMes));
+  const heat = (v: number): CSSProperties | undefined =>
+    v <= 0 ? undefined : { backgroundColor: `rgba(237,10,46,${(0.05 + 0.33 * (v / maxCelulaValor)).toFixed(3)})` };
+
   return (
     <div>
       <PageHeader
@@ -129,53 +136,91 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="card mt-4 overflow-x-auto thin-scroll">
-        <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">
-          Matriz CD destino × mês (quantidade e R$)
+      <div className="card mt-4 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-700">Matriz CD destino × mês</div>
+            <div className="text-xs text-slate-400">Quantidade (un) e valor transferido (R$) por CD e mês · imediata e impacto fiscal</div>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>menor</span>
+            <span className="inline-block h-2 w-24 rounded-full" style={{ background: "linear-gradient(90deg, rgba(237,10,46,0.06), rgba(237,10,46,0.38))" }} />
+            <span>maior R$</span>
+          </div>
         </div>
-        <table className="min-w-full">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className="th">Destino</th>
-              {meses.map((m) => (
-                <th key={m} className="th text-right">Qtd {rotuloMes(m)}</th>
-              ))}
-              {meses.map((m) => (
-                <th key={"v" + m} className="th text-right">R$ {rotuloMes(m)}</th>
-              ))}
-              <th className="th text-right">Qtd imediata</th>
-              <th className="th text-right">R$ imediata</th>
-              <th className="th text-right">Impacto fiscal</th>
-              <th className="th text-right">Alíquota</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {resumo.map((r) => (
-              <tr key={r.cdDestino} className="hover:bg-slate-50">
-                <td className="td font-medium">
-                  <span className="badge mr-1" style={{ background: corCd(r.cdDestino) + "22", color: corCd(r.cdDestino) }}>CD {r.cdDestino}</span>
-                </td>
-                {r.transfMes.map((q, i) => <td key={i} className="td text-right">{fmtInt(q)}</td>)}
-                {r.valorTransfMes.map((v, i) => <td key={"v" + i} className="td text-right">{fmtRs(v)}</td>)}
-                <td className="td text-right">{fmtInt(r.qtdImediata)}</td>
-                <td className="td text-right">{fmtRs(r.valorImediata)}</td>
-                <td className="td text-right">{fmtRs(r.impactoFiscal)}</td>
-                <td className="td text-right">
-                  {r.aliquotaDefinida ? `${(r.aliquotaFiscal * 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : <span className="text-amber-600">a definir</span>}
-                </td>
+        <div className="thin-scroll overflow-x-auto">
+          <table className="min-w-full border-separate border-spacing-0">
+            <thead className="bg-slate-50">
+              {/* grupos */}
+              <tr>
+                <th rowSpan={2} className="math border-b border-slate-200">Destino</th>
+                <th colSpan={meses.length + 1} className="matgh grp border-b border-slate-200">Quantidade (un)</th>
+                <th colSpan={meses.length + 1} className="matgh grp border-b border-slate-200">Valor transferido (R$)</th>
+                <th rowSpan={2} className="math grp border-b border-slate-200">Participação</th>
+                <th colSpan={2} className="matgh grp border-b border-slate-200 bg-brand-50 text-brand-700">Transferência imediata</th>
+                <th colSpan={2} className="matgh grp border-b border-slate-200 bg-amber-50 text-amber-700">Fiscal (ICMS)</th>
               </tr>
-            ))}
-            <tr className="bg-slate-50 font-semibold">
-              <td className="td">Total geral</td>
-              {totalRow.transfMes.map((q, i) => <td key={i} className="td text-right">{fmtInt(q)}</td>)}
-              {totalRow.valorMes.map((v, i) => <td key={"v" + i} className="td text-right">{fmtRs(v)}</td>)}
-              <td className="td text-right">{fmtInt(totalRow.qtdImediata)}</td>
-              <td className="td text-right">{fmtRs(totalRow.valorImediata)}</td>
-              <td className="td text-right">{fmtRs2(totalRow.impactoFiscal)}</td>
-              <td className="td" />
-            </tr>
-          </tbody>
-        </table>
+              {/* colunas */}
+              <tr>
+                {meses.map((m, i) => <th key={"hq" + m} className={`math num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{rotuloMes(m)}</th>)}
+                <th className="math num border-b border-slate-200 border-l border-l-slate-100 text-slate-600">Total</th>
+                {meses.map((m, i) => <th key={"hv" + m} className={`math num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{rotuloMes(m)}</th>)}
+                <th className="math num border-b border-slate-200 border-l border-l-slate-100 text-slate-600">Total</th>
+                <th className="math num grp border-b border-slate-200">Qtd</th>
+                <th className="math num border-b border-slate-200">R$</th>
+                <th className="math num grp border-b border-slate-200">Impacto</th>
+                <th className="math num border-b border-slate-200">Alíquota</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resumo.map((r) => {
+                const rQtd = r.transfMes.reduce((a, b) => a + b, 0);
+                const rValor = r.valorTransfMes.reduce((a, b) => a + b, 0);
+                const share = totalValorGeral > 0 ? rValor / totalValorGeral : 0;
+                return (
+                  <tr key={r.cdDestino} className="border-t border-slate-100 hover:bg-slate-50/70">
+                    <td className="matd">
+                      <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ background: corCd(r.cdDestino) }} />
+                        CD {r.cdDestino}
+                      </span>
+                    </td>
+                    {r.transfMes.map((q, i) => <td key={i} className={`matd num ${i === 0 ? "grp" : ""} ${q <= 0 ? "text-slate-300" : ""}`}>{q > 0 ? fmtInt(q) : "–"}</td>)}
+                    <td className="matd num border-l border-slate-100 font-semibold text-slate-800">{fmtInt(rQtd)}</td>
+                    {r.valorTransfMes.map((v, i) => <td key={"v" + i} className={`matd num ${i === 0 ? "grp" : ""} ${v <= 0 ? "text-slate-300" : ""}`} style={heat(v)}>{v > 0 ? fmtRs(v) : "–"}</td>)}
+                    <td className="matd num border-l border-slate-100 font-semibold text-slate-800">{fmtRs(rValor)}</td>
+                    <td className="matd grp">
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 min-w-[44px] flex-1 overflow-hidden rounded-full bg-slate-100">
+                          <div className="h-full rounded-full" style={{ width: `${(share * 100).toFixed(1)}%`, background: corCd(r.cdDestino) }} />
+                        </div>
+                        <span className="w-9 text-right text-[12px] tabular-nums text-slate-500">{fmtPct(share)}</span>
+                      </div>
+                    </td>
+                    <td className="matd num grp">{fmtInt(r.qtdImediata)}</td>
+                    <td className="matd num">{fmtRs(r.valorImediata)}</td>
+                    <td className="matd num grp">{fmtRs(r.impactoFiscal)}</td>
+                    <td className="matd num">
+                      {r.aliquotaDefinida ? fmtPct(r.aliquotaFiscal, 2) : <span className="rounded bg-amber-50 px-1.5 text-[11px] font-medium text-amber-600">a definir</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-slate-800">
+                <td className="matd font-bold">Total geral</td>
+                {totalRow.transfMes.map((q, i) => <td key={i} className={`matd num ${i === 0 ? "grp" : ""}`}>{fmtInt(q)}</td>)}
+                <td className="matd num border-l border-slate-100 font-bold">{fmtInt(totalQtdGeral)}</td>
+                {totalRow.valorMes.map((v, i) => <td key={"v" + i} className={`matd num ${i === 0 ? "grp" : ""}`}>{fmtRs(v)}</td>)}
+                <td className="matd num border-l border-slate-100 font-bold">{fmtRs(totalValorGeral)}</td>
+                <td className="matd num grp text-slate-400">100%</td>
+                <td className="matd num grp">{fmtInt(totalRow.qtdImediata)}</td>
+                <td className="matd num">{fmtRs(totalRow.valorImediata)}</td>
+                <td className="matd num grp">{fmtRs2(totalRow.impactoFiscal)}</td>
+                <td className="matd" />
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
