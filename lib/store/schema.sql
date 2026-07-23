@@ -117,6 +117,21 @@ CREATE TABLE IF NOT EXISTS cenario (
   base_version_id TEXT REFERENCES calc_versao(id)
 );
 
+-- Simulações salvas (Vercel Neon): guardam o RESULTADO completo do comparativo
+-- (oficial → simulado) em `payload`, permitindo reexibir a simulação ao clicar
+-- nela sem depender do estado atual da base. Criada automaticamente pela
+-- aplicação (lib/store/cenarios.ts) quando o banco está configurado.
+CREATE TABLE IF NOT EXISTS cenario_simulacao (
+  id              TEXT PRIMARY KEY,
+  nome            TEXT NOT NULL,
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  criado_por      TEXT NOT NULL,
+  base_version_id TEXT,
+  parametros      JSONB NOT NULL,
+  payload         JSONB NOT NULL           -- comparativo base/simulado/delta
+);
+CREATE INDEX IF NOT EXISTS ix_cenario_sim_criado ON cenario_simulacao (criado_em DESC);
+
 -- Trilha de aprovações (quem aprovou o quê e quando).
 CREATE TABLE IF NOT EXISTS aprovacao (
   version_id  TEXT NOT NULL REFERENCES calc_versao(id) ON DELETE CASCADE,

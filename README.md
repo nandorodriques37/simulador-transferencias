@@ -139,9 +139,10 @@ npm run dev        # local em http://localhost:3000
 
 1. Importe o repositório no Vercel (framework **Next.js** detectado
    automaticamente; `vercel.json` já ajusta o timeout das rotas de cálculo).
-2. **Persistência (Vercel Postgres):** crie um banco Postgres no painel do
-   Vercel e conecte ao projeto — as variáveis `POSTGRES_URL` são injetadas
-   automaticamente. Depois aplique o esquema:
+2. **Persistência (Vercel Neon / Postgres):** crie um banco **Neon** (ou Vercel
+   Postgres) no painel do Vercel e conecte ao projeto — a variável `POSTGRES_URL`
+   (também aceitamos `DATABASE_URL`) é injetada automaticamente. Opcionalmente
+   aplique o esquema completo:
 
    ```bash
    npm run seed:pg
@@ -150,6 +151,13 @@ npm run dev        # local em http://localhost:3000
    O esquema versionado está em `lib/store/schema.sql`. Sem banco configurado, a
    aplicação roda em **modo demonstração** com uma base sintética em memória
    (`lib/data/seed.ts`) — funcional para avaliação, porém efêmera por instância.
+
+   **Simulações salvas** ⟶ quando o banco está conectado, cada cenário salvo em
+   *Parâmetros e cenários* é gravado no Neon (tabela `cenario_simulacao`, criada
+   automaticamente) com o **resultado completo** do comparativo. Assim as
+   simulações são duráveis, compartilhadas entre instâncias e podem ser
+   **reexibidas ao clicar** nelas. Sem banco, ficam em memória (modo demo) e a
+   tela sinaliza o estado atual (🗄 *Persistidos (Neon)* vs. ⚠ *Em memória*).
 
 ### Pipeline: PR aprovado → app publicado
 

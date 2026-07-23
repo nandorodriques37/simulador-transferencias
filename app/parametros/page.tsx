@@ -32,7 +32,9 @@ export default function ParametrosCenarios() {
 
   // Simulação
   const [res, setRes] = useState<SimResp | null>(null);
-  const [cenarios, setCenarios] = useState<{ id: string; nome: string; criadoEm: string }[]>([]);
+  const [cenarios, setCenarios] = useState<{ id: string; nome: string; criadoEm: string; criadoPor: string }[]>([]);
+  const [durable, setDurable] = useState(false);
+  const [cenarioAtivo, setCenarioAtivo] = useState<string | null>(null);
 
   // Importação
   const [posFile, setPosFile] = useState<File | null>(null);
@@ -47,7 +49,7 @@ export default function ParametrosCenarios() {
   const objRef = useRef<HTMLInputElement>(null);
 
   const carregarOficiais = () => fetch("/api/params").then((r) => r.json()).then((d) => { setParams(d.parametros); setHist(d.historico); });
-  const carregarCenarios = () => fetch("/api/cenarios").then((r) => r.json()).then((d) => setCenarios(d.cenarios));
+  const carregarCenarios = () => fetch("/api/cenarios").then((r) => r.json()).then((d) => { setCenarios(d.cenarios); setDurable(!!d.durable); });
   const carregar = () => {
     carregarOficiais();
     carregarCenarios();
@@ -84,7 +86,34 @@ export default function ParametrosCenarios() {
     if (nome) simular(nome);
   };
 
-  const restaurar = () => { carregarOficiais(); setRes(null); setMsg("Parâmetros oficiais restaurados."); };
+  const restaurar = () => { carregarOficiais(); setRes(null); setCenarioAtivo(null); setMsg("Parâmetros oficiais restaurados."); };
+
+  // Abre uma simulação salva: recarrega o resultado gravado e exibe o comparativo.
+  const abrirCenario = async (id: string, nome: string) => {
+    setRodando(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/cenarios/${id}`);
+      const d = await r.json();
+      if (!r.ok) { setMsg(`Erro: ${d.erro}`); return; }
+      const p = d.cenario.payload as SimResp;
+      setRes({ ...p, cenario: { id, nome } });
+      setParams(d.cenario.parametros);
+      setCenarioAtivo(id);
+      setMsg(`Exibindo cenário “${nome}”.`);
+    } finally { setRodando(false); }
+  };
+
+  const excluirCenario = async (id: string, nome: string) => {
+    if (!window.confirm(`Excluir o cenário “${nome}”?`)) return;
+    const r = await fetch(`/api/cenarios/${id}`, { method: "DELETE" });
+    if (r.ok) {
+      if (cenarioAtivo === id) { setRes(null); setCenarioAtivo(null); }
+      carregarCenarios();
+    } else {
+      const d = await r.json();
+      setMsg(`Erro ao excluir: ${d.erro}`);
+    }
+  };
 
   // --- Importação ---
   const enviar = async (dryRun: boolean) => {
@@ -204,15 +233,40 @@ export default function ParametrosCenarios() {
           )}
 
           <div className="card p-4">
-            <div className="mb-2 text-sm font-semibold text-slate-700">Cenários salvos</div>
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-700">Cenários salvos</div>
+              <span className={`badge ${durable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                {durable ? "🗄 Persistidos (Neon)" : "⚠ Em memória (demo)"}
+              </span>
+            </div>
+            <p className="mb-2 text-xs text-slate-500">Clique em uma simulação para reexibir o comparativo salvo.</p>
             {cenarios.length === 0 ? (
               <div className="text-sm text-slate-400">Nenhum cenário salvo ainda.</div>
             ) : (
               <ul className="space-y-1 text-sm">
                 {cenarios.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
-                    <span className="font-medium">{c.nome}</span>
-                    <span className="text-xs text-slate-400">{new Date(c.criadoEm).toLocaleString("pt-BR")}</span>
+                  <li
+                    key={c.id}
+                    className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 ${cenarioAtivo === c.id ? "border-brand-300 bg-brand-50" : "border-slate-100"}`}
+                  >
+                    <button
+                      className="flex-1 text-left hover:text-brand-700 disabled:opacity-50"
+                      onClick={() => abrirCenario(c.id, c.nome)}
+                      disabled={rodando}
+                      title="Exibir simulação salva"
+                    >
+                      <span className="font-medium">{c.nome}</span>
+                      <span className="block text-xs text-slate-400">
+                        {new Date(c.criadoEm).toLocaleString("pt-BR")} · {c.criadoPor}
+                      </span>
+                    </button>
+                    <button
+                      className="text-xs text-slate-400 hover:text-rose-600"
+                      onClick={() => excluirCenario(c.id, c.nome)}
+                      title="Excluir cenário"
+                    >
+                      ✕
+                    </button>
                   </li>
                 ))}
               </ul>

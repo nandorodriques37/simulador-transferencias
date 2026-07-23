@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
+import { cenariosStore } from "@/lib/store/cenarios";
 import { getUsuario } from "@/lib/auth";
 import { Parametros, ResultadoCalculo } from "@/lib/engine/types";
 
@@ -36,12 +37,7 @@ export async function POST(req: NextRequest) {
   const baseResumo = resumir(base.resultado);
   const simResumo = resumir(sim);
 
-  let cenario = null;
-  if (body.salvarComo && body.salvarComo.trim()) {
-    cenario = store.salvarCenario(body.salvarComo.trim(), params, getUsuario(req));
-  }
-
-  return NextResponse.json({
+  const payload = {
     base: { versaoId: base.id, parametros: base.parametros, resumo: baseResumo },
     simulado: { parametros: params, resumo: simResumo },
     delta: {
@@ -50,6 +46,12 @@ export async function POST(req: NextRequest) {
       impactoFiscal: simResumo.impactoFiscal - baseResumo.impactoFiscal,
       linhas: simResumo.linhas - baseResumo.linhas,
     },
-    cenario,
-  });
+  };
+
+  let cenario = null;
+  if (body.salvarComo && body.salvarComo.trim()) {
+    cenario = await cenariosStore.salvar(body.salvarComo.trim(), params, getUsuario(req), payload);
+  }
+
+  return NextResponse.json({ ...payload, cenario });
 }
