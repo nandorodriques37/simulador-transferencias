@@ -1,4 +1,4 @@
-import { LinhaPlano } from "@/lib/engine/types";
+import { LinhaPlano, valorTotalLinha } from "@/lib/engine/types";
 
 export interface FiltrosPlano {
   cobertura?: "total" | "acima90";
@@ -18,7 +18,7 @@ export interface OrdenacaoPlano {
 }
 
 function valorTotal(l: LinhaPlano): number {
-  return l.valorTransfMes.reduce((a, b) => a + b, 0);
+  return valorTotalLinha(l); // meses + objetivo (funciona nos dois modelos)
 }
 
 export function filtrarPlano(linhas: LinhaPlano[], f: FiltrosPlano): LinhaPlano[] {

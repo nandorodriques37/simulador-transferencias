@@ -1,7 +1,10 @@
 import {
+  chaveObjetivo,
   chavePedido,
   FiltroCobertura,
   LinhaPlano,
+  ObjetivoDestino,
+  ObjetivoIndex,
   Parametros,
   PedidosIndex,
   PosicaoEstoque,
@@ -84,22 +87,40 @@ export interface OpcoesCalculo {
 }
 
 /**
- * Motor de cálculo completo. Puro, sem estado, testável:
- * (posicao, pedidosIndex, parametros) -> (plano, resumo, reconciliação).
+ * Motor de cálculo completo. Puro, sem estado, testável.
+ *
+ * Suporta os DOIS modelos de transferência (modelo híbrido), escolhidos por
+ * `params.modelo`:
+ *
+ * - "drp" (modelo 1): distribui o excesso do CD de origem pelos PEDIDOS
+ *   PROJETADOS, cascateando por (mês × CD) na ordem cronológica e de
+ *   prioridade. Fonte da demanda: `pedidosIndex`.
+ *
+ * - "estoque_objetivo" (modelo 2): distribui o mesmo excesso para atender o
+ *   SALDO DE ESTOQUE OBJETIVO de cada CD destino, SEM quebra mensal — um único
+ *   balde por CD, na ordem de prioridade. Fonte da demanda: `objetivoIndex`.
+ *   Neste modelo os vetores por mês saem ZERADOS e a coluna
+ *   "Transferir para atender estoque objetivo" carrega a transferência.
+ *
+ * Em ambos os modelos a cascata gulosa `cascataCumsum` é a mesma — muda apenas
+ * de onde vêm os baldes de demanda.
  */
 export function calcular(
   posicao: PosicaoEstoque[],
   pedidosIndex: PedidosIndex,
   params: Parametros,
   opts: OpcoesCalculo = {},
+  objetivoIndex: ObjetivoIndex = new Map(),
 ): ResultadoCalculo {
   const t0 = Date.now();
+  const modelo = params.modelo ?? "drp";
+  const objetivoMode = modelo === "estoque_objetivo";
   const meses = params.horizonteMeses;
   // Destinos = prioridade, sempre excluindo o CD de origem (não transfere para si).
   const cds = params.prioridadeCds.filter((cd) => cd !== params.cdOrigem);
   const nMes = meses.length;
   const nCd = cds.length;
-  const nBaldes = nMes * nCd;
+  const nBaldes = objetivoMode ? nCd : nMes * nCd;
   const fs = params.fatorSegurancaImediata;
   const validar = opts.validarInvariante ?? true;
   const progInt = opts.progressoIntervalo ?? 5000;
@@ -115,6 +136,8 @@ export function calcular(
       aliquotaDefinida: params.aliquotaFiscal[cd] !== undefined,
       transfMes: new Array(nMes).fill(0),
       valorTransfMes: new Array(nMes).fill(0),
+      transfObjetivo: 0,
+      valorTransfObjetivo: 0,
       qtdImediata: 0,
       valorImediata: 0,
       impactoFiscal: 0,
@@ -127,9 +150,12 @@ export function calcular(
   let invarianteOk = true;
   let maiorDivergencia = 0;
   const valorTransfMesTotal = new Array(nMes).fill(0);
+  let valorTransfObjetivoTotal = 0;
   let valorImediataTotal = 0;
 
-  const pedidosBuf = new Array<number>(nBaldes);
+  // Buffer de demanda por balde. No modelo objetivo há 1 balde por CD; no
+  // modelo DRP há 1 balde por (mês × CD).
+  const demandaBuf = new Array<number>(nBaldes);
 
   for (let s = 0; s < posicao.length; s++) {
     const sku = posicao[s];
@@ -143,16 +169,24 @@ export function calcular(
     }
     skusComExcesso++;
 
-    // REGRA 3 — demanda por balde (ordem cronológica × prioridade).
-    let b = 0;
-    for (let m = 0; m < nMes; m++) {
+    // Demanda por balde (ordem de prioridade — e cronológica no modelo DRP).
+    if (objetivoMode) {
+      // MODELO 2 — 1 balde por CD: saldo de estoque objetivo daquele CD.
       for (let c = 0; c < nCd; c++) {
-        pedidosBuf[b++] = pedidosIndex.get(chavePedido(meses[m], cds[c], sku.codigoProduto)) ?? 0;
+        demandaBuf[c] = objetivoIndex.get(chaveObjetivo(cds[c], sku.codigoProduto)) ?? 0;
+      }
+    } else {
+      // MODELO DRP (REGRA 3) — 1 balde por (mês × CD): pedido projetado.
+      let b = 0;
+      for (let m = 0; m < nMes; m++) {
+        for (let c = 0; c < nCd; c++) {
+          demandaBuf[b++] = pedidosIndex.get(chavePedido(meses[m], cds[c], sku.codigoProduto)) ?? 0;
+        }
       }
     }
 
-    // REGRA 4 — cascata vetorizada.
-    const transf = cascataCumsum(pedidosBuf, excesso);
+    // REGRA 4 — cascata vetorizada (idêntica nos dois modelos).
+    const transf = cascataCumsum(demandaBuf, excesso);
 
     // REGRA 5/6/7 — valores, imediata, caixas, cobertura por CD.
     const dispHoje = Math.max(sku.estoqueDisponivel - sku.vendaMedia3m * fs, 0);
@@ -178,29 +212,47 @@ export function calcular(
     // Monta uma linha por CD com transferência > 0.
     for (let c = 0; c < nCd; c++) {
       const cd = cds[c];
-      const transfMes = new Array(nMes);
-      const pedidoMes = new Array(nMes);
-      const valorTransfMes = new Array(nMes);
-      const transfCaixasMes = new Array(nMes);
+      const transfMes = new Array(nMes).fill(0);
+      const pedidoMes = new Array(nMes).fill(0);
+      const valorTransfMes = new Array(nMes).fill(0);
+      const transfCaixasMes = new Array(nMes).fill(0);
+      let transfObjetivo = 0;
+      let valorTransfObjetivo = 0;
+      let transfObjetivoCaixas = 0;
       let transfTotalCd = 0;
       let valorHorizonte = 0;
-      for (let m = 0; m < nMes; m++) {
-        const idx = m * nCd + c;
-        const t = transf[idx];
-        transfMes[m] = t;
-        pedidoMes[m] = pedidosBuf[idx];
-        const v = t * preco;
-        valorTransfMes[m] = v;
-        transfCaixasMes[m] = sku.embCompra > 0 ? round(t / sku.embCompra) : 0;
-        transfTotalCd += t;
-        valorHorizonte += v;
-        valorTransfMesTotal[m] += v;
+      let baseImediata = 0; // quantidade candidata à transferência imediata
+
+      if (objetivoMode) {
+        // MODELO 2 — transferência única para atender o estoque objetivo.
+        const t = transf[c];
+        transfObjetivo = t;
+        valorTransfObjetivo = t * preco;
+        transfObjetivoCaixas = sku.embCompra > 0 ? round(t / sku.embCompra) : 0;
+        transfTotalCd = t;
+        valorHorizonte = valorTransfObjetivo;
+        valorTransfObjetivoTotal += valorTransfObjetivo;
+        baseImediata = t; // atender o objetivo é, por natureza, imediato
+      } else {
+        // MODELO DRP — transferência mês a mês.
+        for (let m = 0; m < nMes; m++) {
+          const idx = m * nCd + c;
+          const t = transf[idx];
+          transfMes[m] = t;
+          pedidoMes[m] = demandaBuf[idx];
+          const v = t * preco;
+          valorTransfMes[m] = v;
+          transfCaixasMes[m] = sku.embCompra > 0 ? round(t / sku.embCompra) : 0;
+          transfTotalCd += t;
+          valorHorizonte += v;
+          valorTransfMesTotal[m] += v;
+        }
+        baseImediata = transfMes[0] ?? 0; // mês 1 deste CD
       }
       if (transfTotalCd <= 0) continue; // REGRA 9 — materialidade
 
-      // REGRA 5/6 — transferência imediata (mês 1 deste CD).
-      const transfM1 = transfMes[0] ?? 0;
-      const qtdImediata = Math.min(transfM1, dispHoje);
+      // REGRA 5/6 — transferência imediata.
+      const qtdImediata = Math.min(baseImediata, dispHoje);
       // Transferência imediata em CAIXAS (cx): arredonda SEMPRE PARA BAIXO
       // (caixa fechada). Se a quantidade imediata não fecha 1 caixa
       // (qtdImediata < embCompra), a transferência imediata em cx é ZERO —
@@ -222,6 +274,8 @@ export function calcular(
         r.transfMes[m] += transfMes[m];
         r.valorTransfMes[m] += valorTransfMes[m];
       }
+      r.transfObjetivo += transfObjetivo;
+      r.valorTransfObjetivo += valorTransfObjetivo;
       r.qtdImediata += qtdImediata;
       r.valorImediata += valorImediata;
       r.impactoFiscal += valorHorizonte * r.aliquotaFiscal;
@@ -246,6 +300,9 @@ export function calcular(
         transfMes,
         valorTransfMes,
         transfCaixasMes,
+        transfObjetivo,
+        valorTransfObjetivo,
+        transfObjetivoCaixas,
         qtdTransfImediata: qtdImediata,
         valorTransfImediata: valorImediata,
         imediataCaixas,
@@ -262,7 +319,7 @@ export function calcular(
   const resumo = cds.map((cd) => resumoMap.get(cd)!);
   const impactoFiscalTotal = resumo.reduce((a, r) => a + r.impactoFiscal, 0);
   const alertaAliquotas = resumo
-    .filter((r) => !r.aliquotaDefinida && r.valorTransfMes.some((v) => v > 0))
+    .filter((r) => !r.aliquotaDefinida && (r.valorTransfMes.some((v) => v > 0) || r.valorTransfObjetivo > 0))
     .map((r) => r.cdDestino);
 
   const reconciliacao: Reconciliacao = {
@@ -279,9 +336,11 @@ export function calcular(
     resumo,
     reconciliacao,
     meta: {
+      modelo,
       excessoSimplesRs,
       excessoTotalRs,
       valorTransfMesTotal,
+      valorTransfObjetivoTotal,
       valorImediataTotal,
       impactoFiscalTotal,
       tempoMs: Date.now() - t0,
@@ -297,6 +356,19 @@ export function indexarPedidos(pedidos: { anoMes: string; cdDestino: number; cod
   const idx: PedidosIndex = new Map();
   for (const p of pedidos) {
     idx.set(chavePedido(p.anoMes, p.cdDestino, p.codigoProduto), p.pedido);
+  }
+  return idx;
+}
+
+/**
+ * Constrói o índice de estoque objetivo por (cd, produto) — join O(1) por chave.
+ * Se houver linhas repetidas para a mesma (cd, produto), soma os saldos.
+ */
+export function indexarObjetivos(objetivos: ObjetivoDestino[]): ObjetivoIndex {
+  const idx: ObjetivoIndex = new Map();
+  for (const o of objetivos) {
+    const k = chaveObjetivo(o.cdDestino, o.codigoProduto);
+    idx.set(k, (idx.get(k) ?? 0) + o.saldoEstoqueObjetivo);
   }
   return idx;
 }

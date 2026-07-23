@@ -56,6 +56,17 @@ export const SCHEMA_PEDIDOS: ColSpec[] = [
   { campo: "eo", rotulo: "Estoque objetivo destino", aliases: ["eo"], required: false, tipo: "num" },
 ];
 
+// --- Estoque objetivo por CD destino (MODELO 2 — planilha simples) -----------
+// Colunas: CD destino, produto (código), descrição e o saldo de estoque
+// objetivo (quantidade que o CD precisa receber). É a fonte de demanda do
+// modelo "estoque_objetivo": substitui os pedidos projetados mês a mês.
+export const SCHEMA_OBJETIVO: ColSpec[] = [
+  { campo: "cdDestino", rotulo: "CD destino", aliases: ["cd_destino", "cdDestino", "cd", "CD_DESTINO", "deposito_destino", "codigo_deposito_pd"], required: true, tipo: "int", naoNegativo: true, chave: true },
+  { campo: "codigoProduto", rotulo: "Produto (código)", aliases: ["produto", "Produto", "codigo_produto", "codigoProduto", "CodsemDv", "codigo", "Cod"], required: true, tipo: "int", naoNegativo: true, chave: true },
+  { campo: "descricao", rotulo: "Descrição", aliases: ["descricao", "Descrição", "descrição", "descricao_produto", "nome_produto", "produto_descricao"], required: false, tipo: "str" },
+  { campo: "saldoEstoqueObjetivo", rotulo: "Saldo de estoque objetivo", aliases: ["saldo_estoque_objetivo", "saldoEstoqueObjetivo", "saldo_estoque_objetivo", "SALDO_ESTOQUE_OBJETIVO", "saldo_objetivo", "estoque_objetivo_destino", "saldo estoque objetivo"], required: true, tipo: "num", naoNegativo: true },
+];
+
 // --- Campos CALCULADOS pelo app (o que eram fórmulas na planilha) ------------
 // Documentação viva do mapeamento fórmula → regra do motor. Nenhum destes
 // precisa existir na base anexada.

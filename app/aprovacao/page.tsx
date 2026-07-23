@@ -6,7 +6,8 @@ import { fmtInt, fmtRs, fmtRs2 } from "@/lib/format";
 
 interface Linha {
   cdDestino: number; idSku: string; codigoProduto: number; produto: string; fornecedor: string;
-  transfMes: number[]; valorTransfMes: number[]; statusCobertura: string; aprovada?: boolean;
+  transfMes: number[]; valorTransfMes: number[]; transfObjetivo?: number; valorTransfObjetivo?: number;
+  statusCobertura: string; aprovada?: boolean;
 }
 interface PlanoResp { versaoId: string; total: number; itens: Linha[] }
 interface AprovResp { versionId: string; totalLinhas: number; aprovadas: number; valorAprovado: number }
@@ -94,8 +95,8 @@ export default function Aprovacao() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {data.itens.map((l) => {
-              const qtd = l.transfMes.reduce((a, b) => a + b, 0);
-              const valor = l.valorTransfMes.reduce((a, b) => a + b, 0);
+              const qtd = l.transfMes.reduce((a, b) => a + b, 0) + (l.transfObjetivo ?? 0);
+              const valor = l.valorTransfMes.reduce((a, b) => a + b, 0) + (l.valorTransfObjetivo ?? 0);
               return (
                 <tr key={chave(l)} className={l.aprovada ? "bg-emerald-50/50" : "hover:bg-slate-50"}>
                   <td className="td">

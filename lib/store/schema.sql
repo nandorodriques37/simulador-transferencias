@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS pedidos_projetados (
   PRIMARY KEY (import_id, ano_mes, cd_destino, codigo_produto)  -- rejeita duplicidade de chave
 );
 
+-- Estoque objetivo por CD destino (MODELO 2 / híbrido): fonte de demanda simples
+-- (CD destino, produto, descrição, saldo de estoque objetivo). Saldos repetidos
+-- por (cd, produto) são somados na leitura pelo motor.
+CREATE TABLE IF NOT EXISTS estoque_objetivo (
+  import_id     TEXT NOT NULL REFERENCES importacao(id) ON DELETE CASCADE,
+  cd_destino    INTEGER NOT NULL,
+  codigo_produto INTEGER NOT NULL,
+  descricao     TEXT,
+  saldo_estoque_objetivo NUMERIC NOT NULL DEFAULT 0,
+  PRIMARY KEY (import_id, cd_destino, codigo_produto)
+);
+
 -- Parâmetros versionados (nunca sobrescrever histórico).
 CREATE TABLE IF NOT EXISTS parametros_versao (
   version    INTEGER PRIMARY KEY,
@@ -86,6 +98,9 @@ CREATE TABLE IF NOT EXISTS plano_linha (
   transf_mes    NUMERIC[] NOT NULL,
   valor_mes     NUMERIC[] NOT NULL,
   caixas_mes    NUMERIC[] NOT NULL,
+  transf_objetivo NUMERIC NOT NULL DEFAULT 0,      -- MODELO 2: atender estoque objetivo
+  valor_objetivo  NUMERIC NOT NULL DEFAULT 0,
+  objetivo_caixas NUMERIC NOT NULL DEFAULT 0,
   qtd_imediata  NUMERIC, valor_imediata NUMERIC, imediata_caixas NUMERIC, qtd_imediata_arred NUMERIC,
   cobertura_dias NUMERIC, status_cobertura TEXT, transf_total NUMERIC,
   PRIMARY KEY (version_id, cd_destino, id_sku)

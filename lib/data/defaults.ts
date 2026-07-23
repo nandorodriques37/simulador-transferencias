@@ -24,6 +24,7 @@ export function rotuloMes(anoMes: string): string {
 /** Parâmetros padrão (equivalem aos valores da planilha original). */
 export function parametrosPadrao(base = new Date()): Parametros {
   return {
+    modelo: "drp",
     cdOrigem: CD_ORIGEM_PADRAO,
     prioridadeCds: [1, 9, 2, 8, 7],
     horizonteMeses: horizontePadrao(base),

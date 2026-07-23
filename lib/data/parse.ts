@@ -1,6 +1,6 @@
-import { PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
 import { CD_ORIGEM_PADRAO } from "./defaults";
-import { ColSpec, normKey, SCHEMA_PEDIDOS, SCHEMA_POSICAO } from "./schema";
+import { ColSpec, normKey, SCHEMA_OBJETIVO, SCHEMA_PEDIDOS, SCHEMA_POSICAO } from "./schema";
 
 export interface ErroLinha {
   linha: number; // linha aproximada na planilha (cabeçalho = 1)
@@ -175,6 +175,17 @@ export function parsePedidos(rows: Record<string, unknown>[]): { itens: PedidoPr
     estoqueAtual: Number(o.estoqueAtual) || 0,
     estoqueProjetado: Number(o.estoqueProjetado) || 0,
     eo: Number(o.eo) || 0,
+  }));
+  return { itens: out, diag };
+}
+
+export function parseObjetivos(rows: Record<string, unknown>[]): { itens: ObjetivoDestino[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(rows, SCHEMA_OBJETIVO);
+  const out: ObjetivoDestino[] = itens.map((o) => ({
+    cdDestino: Number(o.cdDestino),
+    codigoProduto: Number(o.codigoProduto),
+    descricao: str(o.descricao),
+    saldoEstoqueObjetivo: Number(o.saldoEstoqueObjetivo) || 0,
   }));
   return { itens: out, diag };
 }

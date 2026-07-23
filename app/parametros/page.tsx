@@ -17,8 +17,8 @@ interface SimResp {
   cenario: { id: string; nome: string } | null;
 }
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
-interface Relatorio { posicaoLinhas: number; pedidosLinhas: number; achados: Achado[]; ok: boolean }
-interface ImportLog { id: string; em: string; por: string; origem: string; posicaoLinhas: number; pedidosLinhas: number; relatorio: Relatorio }
+interface Relatorio { posicaoLinhas: number; pedidosLinhas: number; objetivosLinhas?: number; achados: Achado[]; ok: boolean }
+interface ImportLog { id: string; em: string; por: string; origem: string; posicaoLinhas: number; pedidosLinhas: number; objetivosLinhas?: number; relatorio: Relatorio }
 interface Hist { version: number; criadoEm: string; criadoPor: string; hash: string }
 
 const nivelCor = { erro: "erro", aviso: "warn", info: "info" } as const;
@@ -37,12 +37,14 @@ export default function ParametrosCenarios() {
   // Importação
   const [posFile, setPosFile] = useState<File | null>(null);
   const [pedFile, setPedFile] = useState<File | null>(null);
+  const [objFile, setObjFile] = useState<File | null>(null);
   const [relatorio, setRelatorio] = useState<Relatorio | null>(null);
   const [importando, setImportando] = useState(false);
   const [progresso, setProgresso] = useState(0);
   const [log, setLog] = useState<ImportLog[]>([]);
   const posRef = useRef<HTMLInputElement>(null);
   const pedRef = useRef<HTMLInputElement>(null);
+  const objRef = useRef<HTMLInputElement>(null);
 
   const carregarOficiais = () => fetch("/api/params").then((r) => r.json()).then((d) => { setParams(d.parametros); setHist(d.historico); });
   const carregarCenarios = () => fetch("/api/cenarios").then((r) => r.json()).then((d) => setCenarios(d.cenarios));
@@ -55,6 +57,8 @@ export default function ParametrosCenarios() {
   useEffect(carregar, []);
 
   if (!params) return <div className="pt-10"><Spinner label="Carregando…" /></div>;
+
+  const objetivoAtivo = params.modelo === "estoque_objetivo";
 
   // --- Ações de parâmetros/cenário ---
   const salvarOficial = async () => {
@@ -84,11 +88,12 @@ export default function ParametrosCenarios() {
 
   // --- Importação ---
   const enviar = async (dryRun: boolean) => {
-    if (!posFile && !pedFile) return;
+    if (!posFile && !pedFile && !objFile) return;
     setImportando(true); setProgresso(dryRun ? 30 : 20); if (dryRun) setRelatorio(null);
     const fd = new FormData();
     if (posFile) fd.append("posicao", posFile);
     if (pedFile) fd.append("pedidos", pedFile);
+    if (objFile) fd.append("objetivo", objFile);
     fd.append("dryRun", String(dryRun));
     const r = await fetch("/api/import", { method: "POST", body: fd });
     setProgresso(90);
@@ -97,8 +102,8 @@ export default function ParametrosCenarios() {
     setRelatorio(d.relatorio ?? { posicaoLinhas: 0, pedidosLinhas: 0, achados: [{ nivel: "erro", codigo: "x", mensagem: d.erro, qtd: 0 }], ok: false });
     if (!dryRun && r.ok) {
       setMsg(`Base importada · nova versão ${d.versaoId}.`);
-      setPosFile(null); setPedFile(null);
-      if (posRef.current) posRef.current.value = ""; if (pedRef.current) pedRef.current.value = "";
+      setPosFile(null); setPedFile(null); setObjFile(null);
+      if (posRef.current) posRef.current.value = ""; if (pedRef.current) pedRef.current.value = ""; if (objRef.current) objRef.current.value = "";
       carregar();
     } else if (!dryRun) {
       setMsg(`Importação bloqueada: ${d.erro}`);
@@ -215,18 +220,29 @@ export default function ParametrosCenarios() {
           </div>
 
           <div className="card p-4">
-            <div className="mb-3 text-sm font-semibold text-slate-700">Importar bases (CSV / Excel / XLSB)</div>
+            <div className="mb-1 text-sm font-semibold text-slate-700">Importar bases (CSV / Excel / XLSB)</div>
+            <p className="mb-3 text-xs text-slate-500">
+              A <b>posição de estoque</b> alimenta o excesso do CD de origem nos dois modelos. Depois envie a fonte de
+              demanda do modelo ativo:{" "}
+              {objetivoAtivo
+                ? <><b>estoque objetivo</b> (modelo 2)</>
+                : <><b>pedidos projetados</b> (DRP)</>}. Você pode enviar só o arquivo que mudou.
+            </p>
             <label className="mb-2 block text-sm">
               <span className="label">Posição de estoque origem (BASE_MODELOS)</span>
               <input ref={posRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="input mt-1 w-full" onChange={(e) => setPosFile(e.target.files?.[0] ?? null)} />
             </label>
-            <label className="mb-3 block text-sm">
-              <span className="label">Pedidos projetados (PEDIDOS PROJETADOS)</span>
+            <label className={`mb-2 block text-sm ${objetivoAtivo ? "opacity-60" : ""}`}>
+              <span className="label">Pedidos projetados (PEDIDOS PROJETADOS) {!objetivoAtivo && <span className="text-brand-600">· modelo ativo</span>}</span>
               <input ref={pedRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="input mt-1 w-full" onChange={(e) => setPedFile(e.target.files?.[0] ?? null)} />
             </label>
+            <label className={`mb-3 block text-sm ${objetivoAtivo ? "" : "opacity-60"}`}>
+              <span className="label">Estoque objetivo por CD (CD destino · produto · descrição · saldo objetivo) {objetivoAtivo && <span className="text-brand-600">· modelo ativo</span>}</span>
+              <input ref={objRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="input mt-1 w-full" onChange={(e) => setObjFile(e.target.files?.[0] ?? null)} />
+            </label>
             <div className="flex gap-2">
-              <button className="btn-ghost" onClick={() => enviar(true)} disabled={importando || (!posFile && !pedFile)}>Validar (prévia)</button>
-              <button className="btn-primary" onClick={() => enviar(false)} disabled={importando || (!posFile && !pedFile)}>Importar e recalcular</button>
+              <button className="btn-ghost" onClick={() => enviar(true)} disabled={importando || (!posFile && !pedFile && !objFile)}>Validar (prévia)</button>
+              <button className="btn-primary" onClick={() => enviar(false)} disabled={importando || (!posFile && !pedFile && !objFile)}>Importar e recalcular</button>
             </div>
             {importando && <div className="mt-3"><Progress pct={progresso} label="Processando base…" /></div>}
 
@@ -234,6 +250,7 @@ export default function ParametrosCenarios() {
               <div className="mt-4">
                 <div className="mb-2 text-sm">
                   Prévia: <b>{fmtInt(relatorio.posicaoLinhas)}</b> SKUs · <b>{fmtInt(relatorio.pedidosLinhas)}</b> pedidos ·{" "}
+                  <b>{fmtInt(relatorio.objetivosLinhas ?? 0)}</b> objetivos ·{" "}
                   {relatorio.ok ? <span className="text-emerald-600">sem erros bloqueantes</span> : <span className="text-rose-600">contém erros</span>}
                 </div>
                 <div className="space-y-1">
@@ -257,7 +274,7 @@ export default function ParametrosCenarios() {
                   {log.map((l) => (
                     <li key={l.id} className="rounded border border-slate-100 px-2 py-1">
                       <div className="flex justify-between"><span className="font-medium">{l.origem}</span><span className="text-slate-400">{new Date(l.em).toLocaleString("pt-BR")}</span></div>
-                      <div className="text-slate-500">{fmtInt(l.posicaoLinhas)} SKUs · {fmtInt(l.pedidosLinhas)} pedidos · por {l.por}</div>
+                      <div className="text-slate-500">{fmtInt(l.posicaoLinhas)} SKUs · {fmtInt(l.pedidosLinhas)} pedidos · {fmtInt(l.objetivosLinhas ?? 0)} objetivos · por {l.por}</div>
                     </li>
                   ))}
                 </ul>

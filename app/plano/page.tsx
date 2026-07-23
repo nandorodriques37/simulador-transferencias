@@ -20,6 +20,9 @@ interface Linha {
   transfMes: number[];
   valorTransfMes: number[];
   transfCaixasMes: number[];
+  transfObjetivo: number;
+  valorTransfObjetivo: number;
+  transfObjetivoCaixas: number;
   qtdTransfImediata: number;
   imediataCaixas: number;
   valorTransfImediata: number;
@@ -32,7 +35,7 @@ interface Facets {
   cds: number[]; categorias: string[]; fornecedores: string[]; compradores: string[]; analistas: string[]; status: string[];
 }
 interface Resp {
-  meses: string[]; cdOrigem?: number; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
+  meses: string[]; modelo?: "drp" | "estoque_objetivo"; cdOrigem?: number; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
 }
 
 const emptyFacets: Facets = { cds: [], categorias: [], fornecedores: [], compradores: [], analistas: [], status: [] };
@@ -84,6 +87,7 @@ export default function PlanoPage() {
   const facets = data?.facets ?? emptyFacets;
   const meses = data?.meses ?? [];
   const cdOrigem = data?.cdOrigem;
+  const objetivoMode = data?.modelo === "estoque_objetivo";
   const itens = data?.itens ?? [];
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -95,7 +99,7 @@ export default function PlanoPage() {
   });
 
   const rot = meses.map(rotuloMes);
-  const nCols = 11 + meses.length * 3; // colspan total (loading / vazio)
+  const nCols = 11 + meses.length * 3 + (objetivoMode ? 3 : 0); // colspan total (loading / vazio)
 
   return (
     <div>
@@ -142,6 +146,7 @@ export default function PlanoPage() {
                 <th className="gh grp" colSpan={meses.length}>Transferência (un)</th>
                 <th className="gh grp" colSpan={meses.length}>Caixas (cx)</th>
                 <th className="gh grp" colSpan={meses.length}>Valor (R$)</th>
+                {objetivoMode && <th className="gh grp bg-brand-50 text-brand-700" colSpan={3}>Atender estoque objetivo</th>}
                 <th className="gh grp bg-brand-50 text-brand-700" colSpan={4}>Transferência imediata</th>
                 <th className="gh grp" colSpan={3}>Indicadores</th>
               </tr>
@@ -154,6 +159,11 @@ export default function PlanoPage() {
                 {rot.map((m, i) => <th key={"t" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
                 {rot.map((m, i) => <th key={"c" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
                 {rot.map((m, i) => <th key={"v" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
+                {objetivoMode && <>
+                  <th className="thc num border-b border-slate-200 grp bg-brand-50/60" title="Unidades a transferir para atender o estoque objetivo">Un.</th>
+                  <th className="thc num border-b border-slate-200 bg-brand-50/60">Cx</th>
+                  <th className="thc num border-b border-slate-200 bg-brand-50/60">Valor R$</th>
+                </>}
                 <th className="thc num border-b border-slate-200 grp bg-brand-50/60">Qtd un.</th>
                 <th className="thc num border-b border-slate-200 bg-brand-50/60">Caixas</th>
                 <th className="thc num border-b border-slate-200 bg-brand-50/60">Un. a transferir</th>
@@ -182,6 +192,11 @@ export default function PlanoPage() {
                         {l.transfMes.map((t, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtInt(t)}</td>)}
                         {l.transfCaixasMes.map((c, i) => <td key={i} className={`tdc num text-slate-500 ${i === 0 ? "grp" : ""}`}>{fmtInt(c)}</td>)}
                         {l.valorTransfMes.map((v, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtRs(v)}</td>)}
+                        {objetivoMode && <>
+                          <td className="tdc num grp font-semibold text-brand-700 bg-brand-50/30">{fmtInt(l.transfObjetivo)}</td>
+                          <td className="tdc num text-slate-500 bg-brand-50/30">{fmtInt(l.transfObjetivoCaixas)}</td>
+                          <td className="tdc num bg-brand-50/30">{fmtRs(l.valorTransfObjetivo)}</td>
+                        </>}
                         <td className="tdc num grp bg-brand-50/30">{fmtInt(l.qtdTransfImediata)}</td>
                         <td className="tdc num text-slate-500 bg-brand-50/30">{fmtInt(l.imediataCaixas)}</td>
                         <td className="tdc num font-semibold text-brand-700 bg-brand-50/30">{fmtInt(l.qtdImediataArredondada)}</td>

@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { corCd } from "@/lib/format";
 
+export type ModeloTransferencia = "drp" | "estoque_objetivo";
+
 export interface Parametros {
+  modelo: ModeloTransferencia;
   cdOrigem: number;
   prioridadeCds: number[];
   horizonteMeses: string[];

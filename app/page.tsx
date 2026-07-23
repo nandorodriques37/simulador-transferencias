@@ -11,6 +11,8 @@ interface ResumoCd {
   aliquotaDefinida: boolean;
   transfMes: number[];
   valorTransfMes: number[];
+  transfObjetivo: number;
+  valorTransfObjetivo: number;
   qtdImediata: number;
   valorImediata: number;
   impactoFiscal: number;
@@ -18,12 +20,14 @@ interface ResumoCd {
 interface DashResp {
   versao: { id: string; label: string; criadoEm: string };
   cobertura: string;
+  modelo: "drp" | "estoque_objetivo";
   meses: string[];
   prioridadeCds: number[];
   kpis: {
     excessoSimplesRs: number;
     excessoTransferivelRs: number;
     valorTransfMes: number[];
+    valorTransfObjetivo: number;
     valorTransfTotal: number;
     valorImediata: number;
     impactoFiscalTotal: number;
@@ -52,26 +56,35 @@ export default function Dashboard() {
   if (!data) return null;
 
   const { kpis, resumo, meses } = data;
+  const objetivoMode = data.modelo === "estoque_objetivo";
   const totalRow = {
     transfMes: meses.map((_, m) => resumo.reduce((a, r) => a + r.transfMes[m], 0)),
     valorMes: meses.map((_, m) => resumo.reduce((a, r) => a + r.valorTransfMes[m], 0)),
+    transfObjetivo: resumo.reduce((a, r) => a + r.transfObjetivo, 0),
+    valorObjetivo: resumo.reduce((a, r) => a + r.valorTransfObjetivo, 0),
     qtdImediata: resumo.reduce((a, r) => a + r.qtdImediata, 0),
     valorImediata: resumo.reduce((a, r) => a + r.valorImediata, 0),
     impactoFiscal: resumo.reduce((a, r) => a + r.impactoFiscal, 0),
   };
 
+  // Valor total por CD (meses + objetivo) — headline consistente nos 2 modelos.
+  const valorCd = (r: ResumoCd) => r.valorTransfMes.reduce((a, b) => a + b, 0) + r.valorTransfObjetivo;
+  const qtdCd = (r: ResumoCd) => r.transfMes.reduce((a, b) => a + b, 0) + r.transfObjetivo;
+
   const chartPorCd = resumo.map((r) => ({
     cd: `CD ${r.cdDestino}`,
     cdNum: r.cdDestino,
-    valor: r.valorTransfMes.reduce((a, b) => a + b, 0),
+    valor: valorCd(r),
     fiscal: r.impactoFiscal,
   }));
-  const chartMensal = meses.map((m, i) => ({ mes: rotuloMes(m), valor: kpis.valorTransfMes[i] }));
+  const chartMensal = objetivoMode
+    ? [{ mes: "Estoque objetivo", valor: kpis.valorTransfObjetivo }]
+    : meses.map((m, i) => ({ mes: rotuloMes(m), valor: kpis.valorTransfMes[i] }));
 
-  // Matriz: totais gerais + heatmap por célula de valor (CD × mês).
-  const totalQtdGeral = totalRow.transfMes.reduce((a, b) => a + b, 0);
-  const totalValorGeral = totalRow.valorMes.reduce((a, b) => a + b, 0);
-  const maxCelulaValor = Math.max(1, ...resumo.flatMap((r) => r.valorTransfMes));
+  // Matriz: totais gerais + heatmap por célula de valor (CD × mês / objetivo).
+  const totalQtdGeral = totalRow.transfMes.reduce((a, b) => a + b, 0) + totalRow.transfObjetivo;
+  const totalValorGeral = totalRow.valorMes.reduce((a, b) => a + b, 0) + totalRow.valorObjetivo;
+  const maxCelulaValor = Math.max(1, ...resumo.flatMap((r) => [...r.valorTransfMes, r.valorTransfObjetivo]));
   const heat = (v: number): CSSProperties | undefined =>
     v <= 0 ? undefined : { backgroundColor: `rgba(237,10,46,${(0.05 + 0.33 * (v / maxCelulaValor)).toFixed(3)})` };
 
@@ -79,7 +92,7 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title="Dashboard executivo"
-        subtitle={`Excesso do CD10 → pedidos projetados (DRP) · versão ${data.versao.id} · recálculo em ${data.tempoMs} ms`}
+        subtitle={`Excesso do CD de origem → ${objetivoMode ? "atender estoque objetivo por CD" : "pedidos projetados (DRP)"} · modelo ${objetivoMode ? "Estoque Objetivo" : "DRP"} · versão ${data.versao.id} · recálculo em ${data.tempoMs} ms`}
         right={
           <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
             <button onClick={() => setCobertura("total")} className={`rounded-md px-3 py-1.5 ${cobertura === "total" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Total</button>
@@ -122,7 +135,9 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
         <div className="card p-4">
-          <div className="mb-2 text-sm font-semibold text-slate-700">Evolução mensal do valor transferido</div>
+          <div className="mb-2 text-sm font-semibold text-slate-700">
+            {objetivoMode ? "Valor transferido para atender estoque objetivo" : "Evolução mensal do valor transferido"}
+          </div>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={chartMensal} margin={{ left: 10, right: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
@@ -139,8 +154,12 @@ export default function Dashboard() {
       <div className="card mt-4 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-slate-700">Matriz CD destino × mês</div>
-            <div className="text-xs text-slate-400">Quantidade (un) e valor transferido (R$) por CD e mês · imediata e impacto fiscal</div>
+            <div className="text-sm font-semibold text-slate-700">{objetivoMode ? "Matriz CD destino (estoque objetivo)" : "Matriz CD destino × mês"}</div>
+            <div className="text-xs text-slate-400">
+              {objetivoMode
+                ? "Quantidade (un) e valor (R$) para atender o estoque objetivo por CD · imediata e impacto fiscal · meses zerados neste modelo"
+                : "Quantidade (un) e valor transferido (R$) por CD e mês · imediata e impacto fiscal"}
+            </div>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-slate-400">
             <span>menor</span>
@@ -154,8 +173,8 @@ export default function Dashboard() {
               {/* grupos */}
               <tr>
                 <th rowSpan={2} className="math border-b border-slate-200">Destino</th>
-                <th colSpan={meses.length + 1} className="matgh grp border-b border-slate-200">Quantidade (un)</th>
-                <th colSpan={meses.length + 1} className="matgh grp border-b border-slate-200">Valor transferido (R$)</th>
+                <th colSpan={meses.length + 1 + (objetivoMode ? 1 : 0)} className="matgh grp border-b border-slate-200">Quantidade (un)</th>
+                <th colSpan={meses.length + 1 + (objetivoMode ? 1 : 0)} className="matgh grp border-b border-slate-200">Valor transferido (R$)</th>
                 <th rowSpan={2} className="math grp border-b border-slate-200">Participação</th>
                 <th colSpan={2} className="matgh grp border-b border-slate-200 bg-brand-50 text-brand-700">Transferência imediata</th>
                 <th colSpan={2} className="matgh grp border-b border-slate-200 bg-amber-50 text-amber-700">Fiscal (ICMS)</th>
@@ -163,8 +182,10 @@ export default function Dashboard() {
               {/* colunas */}
               <tr>
                 {meses.map((m, i) => <th key={"hq" + m} className={`math num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{rotuloMes(m)}</th>)}
+                {objetivoMode && <th className="math num border-b border-slate-200 text-brand-700">Objetivo</th>}
                 <th className="math num border-b border-slate-200 border-l border-l-slate-100 text-slate-600">Total</th>
                 {meses.map((m, i) => <th key={"hv" + m} className={`math num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{rotuloMes(m)}</th>)}
+                {objetivoMode && <th className="math num border-b border-slate-200 text-brand-700">Objetivo</th>}
                 <th className="math num border-b border-slate-200 border-l border-l-slate-100 text-slate-600">Total</th>
                 <th className="math num grp border-b border-slate-200">Qtd</th>
                 <th className="math num border-b border-slate-200">R$</th>
@@ -174,8 +195,8 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {resumo.map((r) => {
-                const rQtd = r.transfMes.reduce((a, b) => a + b, 0);
-                const rValor = r.valorTransfMes.reduce((a, b) => a + b, 0);
+                const rQtd = qtdCd(r);
+                const rValor = valorCd(r);
                 const share = totalValorGeral > 0 ? rValor / totalValorGeral : 0;
                 return (
                   <tr key={r.cdDestino} className="border-t border-slate-100 hover:bg-slate-50/70">
@@ -186,8 +207,10 @@ export default function Dashboard() {
                       </span>
                     </td>
                     {r.transfMes.map((q, i) => <td key={i} className={`matd num ${i === 0 ? "grp" : ""} ${q <= 0 ? "text-slate-300" : ""}`}>{q > 0 ? fmtInt(q) : "–"}</td>)}
+                    {objetivoMode && <td className={`matd num ${r.transfObjetivo <= 0 ? "text-slate-300" : "font-medium text-brand-700"}`}>{r.transfObjetivo > 0 ? fmtInt(r.transfObjetivo) : "–"}</td>}
                     <td className="matd num border-l border-slate-100 font-semibold text-slate-800">{fmtInt(rQtd)}</td>
                     {r.valorTransfMes.map((v, i) => <td key={"v" + i} className={`matd num ${i === 0 ? "grp" : ""} ${v <= 0 ? "text-slate-300" : ""}`} style={heat(v)}>{v > 0 ? fmtRs(v) : "–"}</td>)}
+                    {objetivoMode && <td className={`matd num ${r.valorTransfObjetivo <= 0 ? "text-slate-300" : "font-medium text-brand-700"}`} style={heat(r.valorTransfObjetivo)}>{r.valorTransfObjetivo > 0 ? fmtRs(r.valorTransfObjetivo) : "–"}</td>}
                     <td className="matd num border-l border-slate-100 font-semibold text-slate-800">{fmtRs(rValor)}</td>
                     <td className="matd grp">
                       <div className="flex items-center gap-2">
@@ -209,8 +232,10 @@ export default function Dashboard() {
               <tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-slate-800">
                 <td className="matd font-bold">Total geral</td>
                 {totalRow.transfMes.map((q, i) => <td key={i} className={`matd num ${i === 0 ? "grp" : ""}`}>{fmtInt(q)}</td>)}
+                {objetivoMode && <td className="matd num font-bold text-brand-700">{fmtInt(totalRow.transfObjetivo)}</td>}
                 <td className="matd num border-l border-slate-100 font-bold">{fmtInt(totalQtdGeral)}</td>
                 {totalRow.valorMes.map((v, i) => <td key={"v" + i} className={`matd num ${i === 0 ? "grp" : ""}`}>{fmtRs(v)}</td>)}
+                {objetivoMode && <td className="matd num font-bold text-brand-700">{fmtRs(totalRow.valorObjetivo)}</td>}
                 <td className="matd num border-l border-slate-100 font-bold">{fmtRs(totalValorGeral)}</td>
                 <td className="matd num grp text-slate-400">100%</td>
                 <td className="matd num grp">{fmtInt(totalRow.qtdImediata)}</td>
