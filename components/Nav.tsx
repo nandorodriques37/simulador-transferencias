@@ -26,7 +26,7 @@ export function Nav() {
       </div>
       <div className="mb-4 border-t border-slate-100 px-3 pt-4">
         <div className="text-sm font-bold text-azul-700">Transferências CD</div>
-        <div className="text-xs text-slate-500">Otimização de excesso · DRP</div>
+        <div className="text-xs text-slate-500">Modelo híbrido · DRP + Estoque objetivo</div>
       </div>
       <nav className="flex flex-col gap-1">
         {ITENS.map((it) => {

@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     versaoId: versao.id,
+    modelo: params.modelo ?? "drp",
     meses: params.horizonteMeses,
     cdOrigem: params.cdOrigem,
     facets: extrairFacets(todas),

@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     versao: { id: versao.id, label: versao.label, criadoEm: versao.criadoEm, criadoPor: versao.criadoPor },
     cobertura,
+    modelo: params.modelo ?? "drp",
     meses: params.horizonteMeses,
     prioridadeCds: params.prioridadeCds,
     kpis,

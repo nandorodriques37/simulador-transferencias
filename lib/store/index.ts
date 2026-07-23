@@ -1,5 +1,5 @@
-import { calcular, indexarPedidos } from "@/lib/engine/calc";
-import { Parametros, PedidoProjetado, PosicaoEstoque, ResultadoCalculo } from "@/lib/engine/types";
+import { calcular, indexarObjetivos, indexarPedidos } from "@/lib/engine/calc";
+import { ObjetivoDestino, Parametros, PedidoProjetado, PosicaoEstoque, ResultadoCalculo } from "@/lib/engine/types";
 import { parametrosPadrao } from "@/lib/data/defaults";
 import { gerarBaseDemo } from "@/lib/data/seed";
 import { RelatorioQualidade } from "@/lib/data/validate";
@@ -39,6 +39,7 @@ export interface ImportLogItem {
   origem: string;
   posicaoLinhas: number;
   pedidosLinhas: number;
+  objetivosLinhas: number;
   relatorio: RelatorioQualidade;
 }
 
@@ -52,6 +53,7 @@ export interface Aprovacao {
 interface EstadoStore {
   posicao: PosicaoEstoque[];
   pedidos: PedidoProjetado[];
+  objetivos: ObjetivoDestino[];
   datasetSource: string;
   importedEm: string;
   parametros: Parametros;
@@ -65,6 +67,7 @@ interface EstadoStore {
 
 export function hashParams(p: Parametros): string {
   const s = JSON.stringify({
+    modelo: p.modelo,
     origem: p.cdOrigem,
     cds: p.prioridadeCds,
     meses: p.horizonteMeses,
@@ -84,11 +87,12 @@ const uid = (prefixo: string) => `${prefixo}_${Date.now().toString(36)}_${Math.r
 const g = globalThis as unknown as { __transfStore?: EstadoStore };
 
 function bootstrap(): EstadoStore {
-  const { posicao, pedidos } = gerarBaseDemo();
+  const { posicao, pedidos, objetivos } = gerarBaseDemo();
   const parametros = parametrosPadrao();
   const st: EstadoStore = {
     posicao,
     pedidos,
+    objetivos,
     datasetSource: "Base de demonstração (sintética)",
     importedEm: nowIso(),
     parametros,
@@ -113,7 +117,8 @@ function getState(): EstadoStore {
 
 function runCalcInterno(st: EstadoStore, params: Parametros, por: string, label: string): CalcVersion {
   const idx = indexarPedidos(st.pedidos);
-  const resultado = calcular(st.posicao, idx, params);
+  const objIdx = indexarObjetivos(st.objetivos);
+  const resultado = calcular(st.posicao, idx, params, {}, objIdx);
   const versao: CalcVersion = {
     id: `v${++st.seq}`,
     label,
@@ -136,6 +141,7 @@ export const store = {
     return {
       posicaoLinhas: st.posicao.length,
       pedidosLinhas: st.pedidos.length,
+      objetivosLinhas: st.objetivos.length,
       origem: st.datasetSource,
       importedEm: st.importedEm,
     };
@@ -147,11 +153,22 @@ export const store = {
   getPedidos(): PedidoProjetado[] {
     return getState().pedidos;
   },
+  getObjetivos(): ObjetivoDestino[] {
+    return getState().objetivos;
+  },
 
-  setDataset(posicao: PosicaoEstoque[], pedidos: PedidoProjetado[], origem: string, por: string, relatorio: RelatorioQualidade): ImportLogItem {
+  setDataset(
+    posicao: PosicaoEstoque[],
+    pedidos: PedidoProjetado[],
+    objetivos: ObjetivoDestino[],
+    origem: string,
+    por: string,
+    relatorio: RelatorioQualidade,
+  ): ImportLogItem {
     const st = getState();
     st.posicao = posicao;
     st.pedidos = pedidos;
+    st.objetivos = objetivos;
     st.datasetSource = origem;
     st.importedEm = nowIso();
     const log: ImportLogItem = {
@@ -161,6 +178,7 @@ export const store = {
       origem,
       posicaoLinhas: posicao.length,
       pedidosLinhas: pedidos.length,
+      objetivosLinhas: objetivos.length,
       relatorio,
     };
     st.importLog.unshift(log);
@@ -213,7 +231,7 @@ export const store = {
   // Simulador: calcula um cenário (sem persistir versão) para comparação.
   simular(params: Parametros): ResultadoCalculo {
     const st = getState();
-    return calcular(st.posicao, indexarPedidos(st.pedidos), params);
+    return calcular(st.posicao, indexarPedidos(st.pedidos), params, {}, indexarObjetivos(st.objetivos));
   },
 
   salvarCenario(nome: string, params: Parametros, por: string): Cenario {

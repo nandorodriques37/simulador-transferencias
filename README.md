@@ -1,9 +1,24 @@
 # Otimização de Transferências entre CDs
 
 Aplicativo web que substitui a planilha Excel usada para planejar transferências
-de **excesso de estoque do CD10** para os CDs **1, 9, 2, 8 e 7**, abatendo os
-**pedidos de compra projetados (DRP)** dos próximos meses — liberando capital de
-giro e mostrando o **impacto fiscal (ICMS)** de cada rota ao lado do benefício.
+de **excesso de estoque do CD10** para os CDs **1, 9, 2, 8 e 7** — liberando
+capital de giro e mostrando o **impacto fiscal (ICMS)** de cada rota ao lado do
+benefício.
+
+O app tem **dois modelos de transferência** (modelo **híbrido**), escolhidos com
+um clique em *Parâmetros*:
+
+- **DRP (pedidos):** abate os **pedidos de compra projetados (DRP)** dos próximos
+  meses, cascateando o excesso por (mês × CD) na ordem de prioridade.
+- **Estoque objetivo:** envia o excesso para **atender o saldo de estoque
+  objetivo de cada CD** — sem quebra mensal. Recebe uma planilha simples
+  (`CD destino · produto · descrição · saldo de estoque objetivo`) e distribui
+  tudo o que sobra no CD de origem até cobrir o objetivo de cada destino, na
+  ordem de prioridade.
+
+A **base de acompanhamento é a mesma** nos dois modelos: as colunas mês a mês
+permanecem (saem **zeradas** no modelo Estoque Objetivo) e há a coluna adicional
+**"Transferir p/ Atender Estoque Objetivo"**.
 
 Construído em **Next.js (App Router) + TypeScript**, pronto para deploy no
 **Vercel**, com persistência em **Vercel Postgres** (modo demo em memória por
@@ -62,6 +77,39 @@ npm test
 
 ---
 
+## 🔀 Modelo híbrido (DRP × Estoque objetivo)
+
+O motor é **um só** e a cascata gulosa (`cascataCumsum`) é idêntica nos dois
+modelos — muda apenas **de onde vêm os baldes de demanda** (`params.modelo`):
+
+| | **DRP (pedidos)** | **Estoque objetivo** |
+|---|---|---|
+| Fonte de demanda | Pedidos projetados (mês × CD) | Saldo de estoque objetivo (por CD) |
+| Baldes da cascata | `nMeses × nCDs` | `nCDs` (um por CD) |
+| Quebra mensal | sim | não (meses saem **zerados**) |
+| Coluna resultado | `Transf. <mês>` | `Transferir p/ Atender Estoque Objetivo` |
+| Planilha extra | PEDIDOS PROJETADOS | `CD destino · produto · descrição · saldo objetivo` |
+
+O **excesso transferível** (REGRA 2), o **preço** (REGRA 1), a **transferência
+imediata** (fator de segurança + caixa fechada), a **cobertura** e o **impacto
+fiscal** funcionam igual nos dois modelos. No modelo Estoque Objetivo a
+transferência imediata considera o objetivo inteiro (é, por natureza, imediato),
+e o impacto fiscal usa o valor transferido para atender o objetivo.
+
+A **nova planilha** do modelo 2 tem colunas simples (esquema em
+`SCHEMA_OBJETIVO`, aceita variações de cabeçalho e formato pt-BR):
+
+| Coluna | Campo interno | Obrigatória |
+|---|---|---|
+| CD destino | `cdDestino` | ✅ |
+| Produto (código) | `codigoProduto` | ✅ |
+| Descrição | `descricao` | — |
+| Saldo de estoque objetivo | `saldoEstoqueObjetivo` | ✅ |
+
+Escolha o modelo em *Parâmetros* (seletor no topo do editor) e envie a planilha
+correspondente na área de importação. Toda troca de modelo/base gera **nova
+versão de cálculo** (o histórico nunca é sobrescrito).
+
 ## 🖥️ Telas
 
 1. **Dashboard executivo** — KPIs (excesso, transferido/mês, imediata, fiscal),
@@ -72,10 +120,11 @@ npm test
 3. **Simulador de cenários** — reordena prioridade dos CDs (drag-and-drop),
    alíquotas, fator de segurança e horizonte; compara **base vs. simulado**
    (Δ R$ transferido e Δ fiscal); salva cenários nomeados.
-4. **Parâmetros e importação** — upload das bases (CSV/Excel/XLSB) com
-   **validação de qualidade** (schema, duplicidade de chave, preços zerados/
-   negativos, emb 0, SKUs sem pedido), prévia e log de importações; histórico de
-   parâmetros (auditoria).
+4. **Parâmetros e importação** — **seletor do modelo** (DRP × Estoque objetivo),
+   upload das bases (posição de estoque + pedidos **ou** estoque objetivo, em
+   CSV/Excel/XLSB) com **validação de qualidade** (schema, duplicidade de chave,
+   preços zerados/negativos, emb 0, SKUs sem demanda), prévia e log de
+   importações; histórico de parâmetros (auditoria).
 5. **Aprovação / execução** — marca linhas aprovadas (quem e quando) e gera o
    **arquivo de ordem de transferência** para o ERP/WMS.
 

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
-import { parsePedidos, parsePosicao } from "@/lib/data/parse";
+import { parseObjetivos, parsePedidos, parsePosicao } from "@/lib/data/parse";
 import { validarImportacao } from "@/lib/data/validate";
-import { PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,16 +20,23 @@ export async function POST(req: NextRequest) {
   const form = await req.formData();
   const posicaoFile = form.get("posicao") as File | null;
   const pedidosFile = form.get("pedidos") as File | null;
+  const objetivoFile = form.get("objetivo") as File | null;
   const dryRun = form.get("dryRun") === "true";
 
-  if (!posicaoFile && !pedidosFile) {
-    return NextResponse.json({ erro: "envie ao menos o arquivo de posição de estoque" }, { status: 400 });
+  if (!posicaoFile && !pedidosFile && !objetivoFile) {
+    return NextResponse.json({ erro: "envie ao menos um arquivo (posição de estoque, pedidos ou estoque objetivo)" }, { status: 400 });
   }
+
+  // Modelo ativo (dos parâmetros) — direciona os avisos de validação à fonte
+  // de demanda relevante (pedidos no DRP, objetivo no modelo 2).
+  const modelo = store.getParametros().modelo ?? "drp";
 
   let posicao: PosicaoEstoque[] = store.getPosicao();
   let pedidos: PedidoProjetado[] = store.getPedidos();
+  let objetivos: ObjetivoDestino[] = store.getObjetivos();
   let diagPosicao;
   let diagPedidos;
+  let diagObjetivo;
   const origens: string[] = [];
 
   try {
@@ -45,11 +52,17 @@ export async function POST(req: NextRequest) {
       diagPedidos = r.diag;
       origens.push(pedidosFile.name);
     }
+    if (objetivoFile) {
+      const r = parseObjetivos(await lerPlanilha(objetivoFile));
+      objetivos = r.itens;
+      diagObjetivo = r.diag;
+      origens.push(objetivoFile.name);
+    }
   } catch (e) {
     return NextResponse.json({ erro: `falha ao ler planilha: ${(e as Error).message}` }, { status: 400 });
   }
 
-  const relatorio = validarImportacao(posicao, pedidos, diagPosicao, diagPedidos);
+  const relatorio = validarImportacao(posicao, pedidos, diagPosicao, diagPedidos, objetivos, diagObjetivo, modelo);
   const origem = origens.join(" + ") || "importação";
 
   if (dryRun) {
@@ -59,7 +72,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ erro: "importação bloqueada por erros de validação", relatorio }, { status: 422 });
   }
 
-  const log = store.setDataset(posicao, pedidos, origem, getUsuario(req), relatorio);
+  const log = store.setDataset(posicao, pedidos, objetivos, origem, getUsuario(req), relatorio);
   const versao = store.getVersaoAtual();
   return NextResponse.json({ ok: true, log, versaoId: versao.id, meta: versao.resultado.meta, relatorio });
 }

@@ -10,6 +10,7 @@ export async function GET() {
 }
 
 function validar(p: Partial<Parametros>): string | null {
+  if (p.modelo !== undefined && p.modelo !== "drp" && p.modelo !== "estoque_objetivo") return "modelo inválido";
   if (typeof p.cdOrigem !== "number" || isNaN(p.cdOrigem)) return "cdOrigem inválido";
   if (!Array.isArray(p.prioridadeCds) || p.prioridadeCds.length === 0) return "prioridadeCds inválida";
   if (p.prioridadeCds.map(Number).includes(Number(p.cdOrigem))) return "o CD de origem não pode estar entre os destinos";
@@ -25,6 +26,7 @@ export async function PUT(req: NextRequest) {
   const erro = validar(body);
   if (erro) return NextResponse.json({ erro }, { status: 400 });
   const params: Parametros = {
+    modelo: body.modelo === "estoque_objetivo" ? "estoque_objetivo" : "drp",
     cdOrigem: Number(body.cdOrigem),
     prioridadeCds: body.prioridadeCds!.map(Number),
     horizonteMeses: body.horizonteMeses!,

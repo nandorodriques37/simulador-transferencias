@@ -1,4 +1,4 @@
-import { chavePedido, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { chaveObjetivo, chavePedido, ModeloTransferencia, ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
 import { DiagParse } from "./parse";
 
 export interface Achado {
@@ -12,8 +12,10 @@ export interface Achado {
 export interface RelatorioQualidade {
   posicaoLinhas: number;
   pedidosLinhas: number;
+  objetivosLinhas?: number;
   diagPosicao?: DiagParse;
   diagPedidos?: DiagParse;
+  diagObjetivo?: DiagParse;
   achados: Achado[];
   ok: boolean; // sem erros bloqueantes
 }
@@ -73,21 +75,30 @@ export function validarImportacao(
   pedidos: PedidoProjetado[],
   diagPosicao?: DiagParse,
   diagPedidos?: DiagParse,
+  objetivos: ObjetivoDestino[] = [],
+  diagObjetivo?: DiagParse,
+  modelo: ModeloTransferencia = "drp",
 ): RelatorioQualidade {
   const achados: Achado[] = [];
   const add = (a: Achado) => achados.push(a);
+  const objetivoMode = modelo === "estoque_objetivo";
 
   // --- Schema + valores por linha (bloqueantes) ---
   diagAchados(diagPosicao, "Posição de estoque", add);
   diagAchados(diagPedidos, "Pedidos projetados", add);
+  diagAchados(diagObjetivo, "Estoque objetivo", add);
 
   const schemaPosOk = !diagPosicao || diagPosicao.faltando.length === 0;
 
   // --- Base vazia ---
   if (schemaPosOk && posicao.length === 0)
     add({ nivel: "erro", codigo: "posicao_vazia", mensagem: "Nenhuma linha de posição de estoque válida após a leitura.", qtd: 0 });
-  if (pedidos.length === 0)
-    add({ nivel: "aviso", codigo: "pedidos_vazio", mensagem: "Nenhum pedido projetado válido — o plano ficará vazio.", qtd: 0 });
+
+  // Aviso de demanda vazia — relevante à fonte do MODELO ATIVO.
+  if (!objetivoMode && pedidos.length === 0)
+    add({ nivel: "aviso", codigo: "pedidos_vazio", mensagem: "Nenhum pedido projetado válido — o plano do modelo DRP ficará vazio.", qtd: 0 });
+  if (objetivoMode && objetivos.length === 0)
+    add({ nivel: "aviso", codigo: "objetivo_vazio", mensagem: "Nenhum saldo de estoque objetivo válido — o plano do modelo Estoque Objetivo ficará vazio.", qtd: 0 });
 
   // --- Duplicidade de chave em pedidos (ano_mes|cd|produto) ---
   const seen = new Set<string>();
@@ -98,6 +109,16 @@ export function validarImportacao(
     else seen.add(k);
   }
   if (dups.length) add({ nivel: "erro", codigo: "pedido_duplicado", mensagem: "Chaves (ano_mes, cd, produto) duplicadas em pedidos projetados. Consolide antes de importar.", qtd: dups.length, exemplos: dups });
+
+  // --- Duplicidade de chave em estoque objetivo (cd|produto) ---
+  const objSeen = new Set<string>();
+  const objDups: string[] = [];
+  for (const o of objetivos) {
+    const k = chaveObjetivo(o.cdDestino, o.codigoProduto);
+    if (objSeen.has(k)) { if (objDups.length < 8) objDups.push(k); }
+    else objSeen.add(k);
+  }
+  if (objDups.length) add({ nivel: "aviso", codigo: "objetivo_duplicado", mensagem: "Chaves (cd, produto) repetidas na planilha de estoque objetivo — os saldos serão somados por (cd, produto).", qtd: objDups.length, exemplos: objDups });
 
   // --- SKU duplicado na posição ---
   const skuSeen = new Set<string>();
@@ -126,5 +147,5 @@ export function validarImportacao(
   if (semPedido.length) add({ nivel: "info", codigo: "sku_sem_pedido", mensagem: "SKUs sem pedido projetado em nenhum CD (não geram transferência).", qtd: semPedido.length, exemplos: semPedido.slice(0, 5).map((s) => s.idSku) });
 
   const ok = !achados.some((a) => a.nivel === "erro");
-  return { posicaoLinhas: posicao.length, pedidosLinhas: pedidos.length, diagPosicao, diagPedidos, achados, ok };
+  return { posicaoLinhas: posicao.length, pedidosLinhas: pedidos.length, objetivosLinhas: objetivos.length, diagPosicao, diagPedidos, diagObjetivo, achados, ok };
 }

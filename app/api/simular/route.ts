@@ -6,9 +6,12 @@ import { Parametros, ResultadoCalculo } from "@/lib/engine/types";
 export const dynamic = "force-dynamic";
 
 function resumir(res: ResultadoCalculo) {
+  const valorMeses = res.meta.valorTransfMesTotal.reduce((a, b) => a + b, 0);
   return {
+    modelo: res.meta.modelo,
     valorTransfMes: res.meta.valorTransfMesTotal,
-    valorTransfTotal: res.meta.valorTransfMesTotal.reduce((a, b) => a + b, 0),
+    valorTransfObjetivo: res.meta.valorTransfObjetivoTotal,
+    valorTransfTotal: valorMeses + res.meta.valorTransfObjetivoTotal,
     valorImediata: res.meta.valorImediataTotal,
     impactoFiscal: res.meta.impactoFiscalTotal,
     linhas: res.linhas.length,
@@ -16,7 +19,7 @@ function resumir(res: ResultadoCalculo) {
     meses: res.meta.meses,
     porCd: res.resumo.map((r) => ({
       cd: r.cdDestino,
-      valorTotal: r.valorTransfMes.reduce((a, b) => a + b, 0),
+      valorTotal: r.valorTransfMes.reduce((a, b) => a + b, 0) + r.valorTransfObjetivo,
       valorImediata: r.valorImediata,
       impactoFiscal: r.impactoFiscal,
       qtdImediata: r.qtdImediata,

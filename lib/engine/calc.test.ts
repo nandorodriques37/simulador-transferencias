@@ -4,10 +4,11 @@ import {
   cascataCumsum,
   cobertura,
   excessoTransferivel,
+  indexarObjetivos,
   indexarPedidos,
   precoUnitario,
 } from "./calc";
-import { Parametros, PedidoProjetado, PosicaoEstoque } from "./types";
+import { ObjetivoDestino, Parametros, PedidoProjetado, PosicaoEstoque } from "./types";
 
 // Cascata de referência ITERATIVA (pseudocódigo original) para cruzar com a
 // implementação vetorizada por cumsum.
@@ -24,6 +25,7 @@ const MESES = ["2026_07", "2026_08", "2026_09"];
 const CDS = [1, 9, 2, 8, 7];
 
 const paramsBase: Parametros = {
+  modelo: "drp",
   cdOrigem: 10,
   prioridadeCds: CDS,
   horizonteMeses: MESES,
@@ -31,6 +33,8 @@ const paramsBase: Parametros = {
   fatorSegurancaImediata: 0.5,
   limiteCoberturaDias: 90,
 };
+
+const paramsObjetivo: Parametros = { ...paramsBase, modelo: "estoque_objetivo" };
 
 function sku(p: Partial<PosicaoEstoque>): PosicaoEstoque {
   return {
@@ -259,6 +263,99 @@ describe("resumo executivo e impacto fiscal", () => {
     expect(cd1.valorTransfMes[0]).toBe(1000);
     expect(cd1.impactoFiscal).toBeCloseTo(52, 6);
     expect(res.meta.alertaAliquotasIncompletas).toContain(2);
+  });
+});
+
+describe("modelo estoque objetivo (modelo 2 / híbrido)", () => {
+  it("indexarObjetivos soma saldos repetidos por (cd, produto)", () => {
+    const idx = indexarObjetivos([
+      { cdDestino: 1, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 30 },
+      { cdDestino: 1, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 20 },
+      { cdDestino: 9, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 40 },
+    ]);
+    expect(idx.get("1|5")).toBe(50);
+    expect(idx.get("9|5")).toBe(40);
+  });
+
+  it("distribui o excesso para atender o saldo objetivo por CD, sem quebra mensal", () => {
+    // excesso = 100 (disp 100, custo 1). objetivos: CD1=30, CD9=160 (prioridade 1,9,...)
+    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 1, embCompra: 10 })];
+    const objetivos: ObjetivoDestino[] = [
+      { cdDestino: 1, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 30 },
+      { cdDestino: 9, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 160 },
+    ];
+    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
+
+    const cd1 = res.linhas.find((l) => l.cdDestino === 1)!;
+    const cd9 = res.linhas.find((l) => l.cdDestino === 9)!;
+    // CD1 atende 30 (integral); CD9 recebe o restante do excesso: 100-30 = 70.
+    expect(cd1.transfObjetivo).toBe(30);
+    expect(cd9.transfObjetivo).toBe(70);
+    // meses sempre zerados neste modelo.
+    expect(cd1.transfMes).toEqual([0, 0, 0]);
+    expect(cd1.valorTransfMes).toEqual([0, 0, 0]);
+    // valor do objetivo = qtd * preço.
+    expect(cd1.valorTransfObjetivo).toBe(30);
+    expect(cd9.valorTransfObjetivo).toBe(70);
+    // total da linha reflete o objetivo.
+    expect(cd1.transfTotal).toBe(30);
+    // caixas do objetivo = ROUND(30/10) = 3.
+    expect(cd1.transfObjetivoCaixas).toBe(3);
+  });
+
+  it("CD sem saldo objetivo não gera linha (materialidade)", () => {
+    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 1 })];
+    const objetivos: ObjetivoDestino[] = [
+      { cdDestino: 2, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 40 },
+    ];
+    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
+    expect(res.linhas.length).toBe(1);
+    expect(res.linhas[0].cdDestino).toBe(2);
+    expect(res.resumo.find((r) => r.cdDestino === 1)!.transfObjetivo).toBe(0);
+  });
+
+  it("transferência imediata atende o objetivo respeitando fator de segurança e caixa fechada", () => {
+    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60
+    // objetivo CD1 = 50 => transfObjetivo = min(50, 60) = 50
+    // qtdImediata = min(50, 80) = 50 ; emb=10 => ROUNDDOWN(50/10)=5 => 50
+    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 10 })];
+    const objetivos: ObjetivoDestino[] = [{ cdDestino: 1, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 50 }];
+    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
+    const l = res.linhas[0];
+    expect(l.transfObjetivo).toBe(50);
+    expect(l.qtdTransfImediata).toBe(50);
+    expect(l.imediataCaixas).toBe(5);
+    expect(l.qtdImediataArredondada).toBe(50);
+    expect(l.valorTransfImediata).toBe(100);
+  });
+
+  it("meta zera os meses e reporta o total do objetivo; invariante ok", () => {
+    const posicao = [
+      sku({ idSku: "10-1", codigoProduto: 1, estoqueDisponivel: 100, custoReposicao: 1 }),
+      sku({ idSku: "10-2", codigoProduto: 2, estoqueDisponivel: 50, custoReposicao: 2 }),
+    ];
+    const objetivos: ObjetivoDestino[] = [
+      { cdDestino: 1, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 30 },
+      { cdDestino: 9, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 200 },
+      { cdDestino: 1, codigoProduto: 2, descricao: "", saldoEstoqueObjetivo: 100 },
+    ];
+    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
+    expect(res.meta.modelo).toBe("estoque_objetivo");
+    expect(res.meta.valorTransfMesTotal).toEqual([0, 0, 0]);
+    // produto1: 30*1 + 70*1 = 100 ; produto2: 50*2 = 100 => 200
+    expect(res.meta.valorTransfObjetivoTotal).toBe(200);
+    expect(res.reconciliacao.invarianteOk).toBe(true);
+    expect(res.reconciliacao.maiorDivergencia).toBeLessThan(1e-6);
+  });
+
+  it("impacto fiscal considera o valor do objetivo", () => {
+    // CD1 aliquota 5.2% ; excesso 100 custo 10 ; objetivo CD1 = 40
+    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 10 })];
+    const objetivos: ObjetivoDestino[] = [{ cdDestino: 1, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 40 }];
+    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
+    const cd1 = res.resumo.find((r) => r.cdDestino === 1)!;
+    expect(cd1.valorTransfObjetivo).toBe(400); // 40 * 10
+    expect(cd1.impactoFiscal).toBeCloseTo(400 * 0.052, 6);
   });
 });
 

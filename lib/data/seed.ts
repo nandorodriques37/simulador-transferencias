@@ -1,4 +1,4 @@
-import { PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
 import { CD_ORIGEM_PADRAO, horizontePadrao } from "./defaults";
 
 // Gerador determinístico (mulberry32) — mesma semente, mesma base de demonstração.
@@ -31,6 +31,7 @@ const PRODUTOS = ["FLAC", "COMP", "CAPS", "SOL", "SUSP", "GEL", "POM", "COL", "X
 export interface BaseDemo {
   posicao: PosicaoEstoque[];
   pedidos: PedidoProjetado[];
+  objetivos: ObjetivoDestino[];
 }
 
 /**
@@ -44,6 +45,7 @@ export function gerarBaseDemo(nSkus = 4000, seed = 42): BaseDemo {
   const cds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11];
   const posicao: PosicaoEstoque[] = [];
   const pedidos: PedidoProjetado[] = [];
+  const objetivos: ObjetivoDestino[] = [];
 
   for (let i = 0; i < nSkus; i++) {
     const codigo = 1000 + i;
@@ -94,6 +96,15 @@ export function gerarBaseDemo(nSkus = 4000, seed = 42): BaseDemo {
         }
       }
     }
+
+    // Estoque objetivo por CD (MODELO 2): saldo objetivo simples por (cd, produto).
+    // Nem todo SKU precisa de objetivo em todo CD.
+    for (const cd of cds) {
+      if (r() < 0.4) {
+        const saldo = Math.round(r() * Math.max(vmed, 15) * (0.8 + r() * 2));
+        if (saldo > 0) objetivos.push({ cdDestino: cd, codigoProduto: codigo, descricao: `${cat[3].split(" ")[0]} ${PRODUTOS[Math.floor(r() * PRODUTOS.length)]}`, saldoEstoqueObjetivo: saldo });
+      }
+    }
   }
-  return { posicao, pedidos };
+  return { posicao, pedidos, objetivos };
 }

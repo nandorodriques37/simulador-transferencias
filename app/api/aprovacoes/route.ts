@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
+import { valorTotalLinha } from "@/lib/engine/types";
 
 export const dynamic = "force-dynamic";
 
@@ -9,10 +10,11 @@ export async function GET(req: NextRequest) {
   const aprovacoes = store.getAprovacoes(versionId);
   const versao = store.getVersao(versionId);
   const totalLinhas = versao?.resultado.linhas.length ?? 0;
+  const chavesAprovadas = new Set(aprovacoes.map((a) => a.chave));
   const valorAprovado = versao
     ? versao.resultado.linhas
-        .filter((l) => aprovacoes.some((a) => a.chave === `${l.cdDestino}:${l.idSku}`))
-        .reduce((acc, l) => acc + l.valorTransfMes.reduce((a, b) => a + b, 0), 0)
+        .filter((l) => chavesAprovadas.has(`${l.cdDestino}:${l.idSku}`))
+        .reduce((acc, l) => acc + valorTotalLinha(l), 0)
     : 0;
   return NextResponse.json({ versionId, aprovacoes, totalLinhas, aprovadas: aprovacoes.length, valorAprovado });
 }

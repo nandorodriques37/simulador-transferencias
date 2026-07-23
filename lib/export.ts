@@ -1,10 +1,14 @@
-import { LinhaPlano } from "@/lib/engine/types";
+import { LinhaPlano, qtdTotalLinha, valorTotalLinha } from "@/lib/engine/types";
 import { rotuloMes } from "@/lib/data/defaults";
 
 const dec = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const int = (n: number) => n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 
-/** Colunas do plano, espelhando a aba Transferencias_Long. */
+/**
+ * Colunas do plano (base de acompanhamento). A estrutura é a MESMA nos dois
+ * modelos: as colunas mês a mês permanecem — no modelo "estoque objetivo" elas
+ * saem ZERADAS — e há a nova coluna "Transferir p/ Atender Estoque Objetivo".
+ */
 export function colunasPlano(meses: string[]): string[] {
   const rot = meses.map(rotuloMes);
   return [
@@ -18,14 +22,17 @@ export function colunasPlano(meses: string[]): string[] {
     "Categoria N1",
     ...rot.map((m) => `Pedido ${m}`),
     ...rot.map((m) => `Transf. ${m}`),
+    "Transferir p/ Atender Estoque Objetivo (un)",
     "Preço Unitário",
     ...rot.map((m) => `Valor Transf. ${m}`),
+    "Valor Transf. Estoque Objetivo",
     "Qtd Transf. Imediata",
     "Valor Transf. Imediata",
     "Emb. Compra (un/cx)",
     "Transf. Imediata (cx)",
     "Qtd Transf Unidade Arredond",
     ...rot.map((m) => `Transf. ${m} (cx)`),
+    "Transf. Estoque Objetivo (cx)",
     "Cobertura (dias)",
     "Status Cobertura (>90d)",
   ];
@@ -43,14 +50,17 @@ export function linhaParaArray(l: LinhaPlano): (string | number)[] {
     l.categoriaN1,
     ...l.pedidoMes,
     ...l.transfMes,
+    l.transfObjetivo,
     l.precoUnitario,
     ...l.valorTransfMes,
+    l.valorTransfObjetivo,
     l.qtdTransfImediata,
     l.valorTransfImediata,
     l.embCompra,
     l.imediataCaixas,
     l.qtdImediataArredondada,
     ...l.transfCaixasMes,
+    l.transfObjetivoCaixas,
     Math.round(l.coberturaDias),
     l.statusCobertura,
   ];
@@ -76,9 +86,10 @@ export function ordemTransferenciaCsv(linhas: LinhaPlano[], meses: string[], apr
   const emissao = new Date().toISOString();
   const rows = [header.join(";")];
   linhas.forEach((l, i) => {
-    const qtd = l.transfMes.reduce((a, b) => a + b, 0);
-    const caixas = l.transfCaixasMes.reduce((a, b) => a + b, 0);
-    const valor = l.valorTransfMes.reduce((a, b) => a + b, 0);
+    // Total transferido = meses + estoque objetivo (funciona nos dois modelos).
+    const qtd = qtdTotalLinha(l);
+    const caixas = l.transfCaixasMes.reduce((a, b) => a + b, 0) + l.transfObjetivoCaixas;
+    const valor = valorTotalLinha(l);
     rows.push([
       `OT-${versionId}-${String(i + 1).padStart(5, "0")}`,
       `CD ${l.deposito}`,
