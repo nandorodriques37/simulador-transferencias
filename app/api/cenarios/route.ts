@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { store } from "@/lib/store";
+import { cenariosStore } from "@/lib/store/cenarios";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ cenarios: store.listCenarios() });
+  const cenarios = await cenariosStore.listar();
+  return NextResponse.json({ cenarios, durable: cenariosStore.durable() });
 }
