@@ -4,10 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const ITENS = [
-  { href: "/", label: "Dashboard", icon: "▦", desc: "Visão executiva" },
-  { href: "/plano", label: "Plano de transferência", icon: "▤", desc: "Detalhe por SKU" },
-  { href: "/parametros", label: "Parâmetros e cenários", icon: "⚙", desc: "Config · simulação · upload" },
-  { href: "/aprovacao", label: "Aprovação / execução", icon: "✓", desc: "Ordem para ERP/WMS" },
+  { href: "/", label: "Dashboard", icon: "▦", desc: "Resultado da análise" },
+  { href: "/analise", label: "Nova análise", icon: "⚙", desc: "Bases · origens · destinos" },
+  { href: "/plano", label: "Plano de transferência", icon: "▤", desc: "Rota × SKU · aprovação" },
+  { href: "/carteira", label: "Carteira", icon: "✓", desc: "Aprovadas · faturamento" },
 ];
 
 export function Nav() {
@@ -25,8 +25,8 @@ export function Nav() {
         </div>
       </div>
       <div className="mb-4 border-t border-slate-100 px-3 pt-4">
-        <div className="text-sm font-bold text-azul-700">Transferências CD</div>
-        <div className="text-xs text-slate-500">Modelo híbrido · DRP + Estoque objetivo</div>
+        <div className="text-sm font-bold text-azul-700">Transferências entre CDs</div>
+        <div className="text-xs text-slate-500">Rede multi-origem · multi-destino</div>
       </div>
       <nav className="flex flex-col gap-1">
         {ITENS.map((it) => {
@@ -49,8 +49,9 @@ export function Nav() {
         })}
       </nav>
       <div className="mt-auto px-3 pt-6 text-[11px] leading-relaxed text-slate-400">
-        Motor validado contra a planilha original (RESUMO) ao centavo. Toda mudança
-        de parâmetro gera nova versão de cálculo.
+        Uma base com todos os CDs. Você escolhe a ordem das origens e a ordem dos
+        destinos — as sugestões aprovadas seguem descontadas até o faturamento
+        ser importado.
       </div>
     </aside>
   );

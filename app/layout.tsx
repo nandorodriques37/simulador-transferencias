@@ -4,7 +4,7 @@ import { Nav } from "@/components/Nav";
 
 export const metadata: Metadata = {
   title: "Pague Menos — Transferências entre CDs",
-  description: "Planejamento de transferências de excesso do CD10 para abater pedidos projetados (DRP) dos demais CDs.",
+  description: "Análise de transferências em rede: uma base com todos os CDs, sequência de origens e destinos, carteira aprovada e baixa por faturamento.",
   icons: {
     icon: "/pague-menos-icon.svg",
   },

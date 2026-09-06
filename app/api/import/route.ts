@@ -1,78 +1,104 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
-import { parseObjetivos, parsePedidos, parsePosicao } from "@/lib/data/parse";
+import { lerPlanilha } from "@/lib/data/planilha";
+import { normalizarDataFaturamento } from "@/lib/store/carteira";
+import { parseBase, parsePedidos } from "@/lib/data/parse";
 import { validarImportacao } from "@/lib/data/validate";
-import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
-async function lerPlanilha(file: File): Promise<Record<string, unknown>[]> {
-  const XLSX = await import("xlsx");
-  const buf = new Uint8Array(await file.arrayBuffer());
-  const wb = XLSX.read(buf, { type: "array" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { defval: null, raw: true });
+/**
+ * Importa as DUAS bases da análise:
+ *   - "base"    → base única com todos os CDs (origem e destino);
+ *   - "pedidos" → pedidos projetados (usados no modo Pedidos).
+ * `dryRun=true` só valida e devolve a prévia, sem trocar a base.
+ */
+/** Baixa um arquivo já enviado ao armazenamento e o devolve como File. */
+async function baixar(url: string, nomePadrao: string): Promise<File> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`não foi possível ler o arquivo enviado (${resp.status})`);
+  const nome = decodeURIComponent(new URL(url).pathname.split("/").pop() || nomePadrao);
+  return new File([await resp.arrayBuffer()], nome);
 }
 
 export async function POST(req: NextRequest) {
-  const form = await req.formData();
-  const posicaoFile = form.get("posicao") as File | null;
-  const pedidosFile = form.get("pedidos") as File | null;
-  const objetivoFile = form.get("objetivo") as File | null;
-  const dryRun = form.get("dryRun") === "true";
+  // Dois caminhos: arquivo no corpo (até 4,5 MB) ou URL de um upload direto.
+  let baseFile: File | null = null;
+  let pedidosFile: File | null = null;
+  let dryRun = false;
+  let dataPosicao = "";
 
-  if (!posicaoFile && !pedidosFile && !objetivoFile) {
-    return NextResponse.json({ erro: "envie ao menos um arquivo (posição de estoque, pedidos ou estoque objetivo)" }, { status: 400 });
+  if (req.headers.get("content-type")?.includes("application/json")) {
+    const body = (await req.json()) as { baseUrl?: string; pedidosUrl?: string; dryRun?: boolean; dataPosicao?: string };
+    dryRun = body.dryRun === true;
+    dataPosicao = body.dataPosicao ?? "";
+    try {
+      if (body.baseUrl) baseFile = await baixar(body.baseUrl, "base.csv");
+      if (body.pedidosUrl) pedidosFile = await baixar(body.pedidosUrl, "pedidos.csv");
+    } catch (e) {
+      return NextResponse.json({ erro: (e as Error).message }, { status: 400 });
+    }
+  } else {
+    const form = await req.formData();
+    baseFile = form.get("base") as File | null;
+    pedidosFile = form.get("pedidos") as File | null;
+    dryRun = form.get("dryRun") === "true";
+    dataPosicao = (form.get("dataPosicao") as string | null) ?? "";
   }
 
-  // Modelo ativo (dos parâmetros) — direciona os avisos de validação à fonte
-  // de demanda relevante (pedidos no DRP, objetivo no modelo 2).
-  const modelo = store.getParametros().modelo ?? "drp";
+  if (!baseFile && !pedidosFile)
+    return NextResponse.json({ erro: "envie ao menos um arquivo (base de CDs ou base de pedidos)" }, { status: 400 });
 
-  let posicao: PosicaoEstoque[] = store.getPosicao();
-  let pedidos: PedidoProjetado[] = store.getPedidos();
-  let objetivos: ObjetivoDestino[] = store.getObjetivos();
-  let diagPosicao;
+  // Importação parcial (só pedidos, por exemplo) precisa da base já carregada.
+  await store.ensureBase();
+  const modoDemanda = store.getParametros().modoDemanda;
+  let base: LinhaBase[] | null = null;
+  let pedidos: PedidoProjetado[] | null = null;
+  let diagBase;
   let diagPedidos;
-  let diagObjetivo;
-  const origens: string[] = [];
 
   try {
-    if (posicaoFile) {
-      const r = parsePosicao(await lerPlanilha(posicaoFile));
-      posicao = r.itens;
-      diagPosicao = r.diag;
-      origens.push(posicaoFile.name);
+    if (baseFile) {
+      const r = parseBase(await lerPlanilha(baseFile));
+      base = r.itens;
+      diagBase = r.diag;
     }
     if (pedidosFile) {
       const r = parsePedidos(await lerPlanilha(pedidosFile));
       pedidos = r.itens;
       diagPedidos = r.diag;
-      origens.push(pedidosFile.name);
-    }
-    if (objetivoFile) {
-      const r = parseObjetivos(await lerPlanilha(objetivoFile));
-      objetivos = r.itens;
-      diagObjetivo = r.diag;
-      origens.push(objetivoFile.name);
     }
   } catch (e) {
-    return NextResponse.json({ erro: `falha ao ler planilha: ${(e as Error).message}` }, { status: 400 });
+    return NextResponse.json({ erro: `falha ao ler a planilha: ${(e as Error).message}` }, { status: 400 });
   }
 
-  const relatorio = validarImportacao(posicao, pedidos, diagPosicao, diagPedidos, objetivos, diagObjetivo, modelo);
-  const origem = origens.join(" + ") || "importação";
+  const relatorio = validarImportacao(
+    base ?? store.getBase(),
+    pedidos ?? store.getPedidos(),
+    diagBase,
+    diagPedidos,
+    modoDemanda,
+  );
 
-  if (dryRun) {
-    return NextResponse.json({ dryRun: true, relatorio, origem });
-  }
-  if (!relatorio.ok) {
+  if (dryRun) return NextResponse.json({ dryRun: true, relatorio });
+  if (!relatorio.ok)
     return NextResponse.json({ erro: "importação bloqueada por erros de validação", relatorio }, { status: 422 });
-  }
 
-  const log = store.setDataset(posicao, pedidos, objetivos, origem, getUsuario(req), relatorio);
-  const versao = store.getVersaoAtual();
-  return NextResponse.json({ ok: true, log, versaoId: versao.id, meta: versao.resultado.meta, relatorio });
+  // Data da posição de estoque: informada pelo usuário ou o momento do envio.
+  // É a referência que evita contar duas vezes uma transferência já faturada.
+  const iso = normalizarDataFaturamento(dataPosicao) ?? new Date().toISOString();
+  const log = await store.setDataset(
+    base,
+    pedidos,
+    baseFile?.name ?? "",
+    pedidosFile?.name ?? "",
+    getUsuario(req),
+    relatorio,
+    iso,
+  );
+  return NextResponse.json({ ok: true, log, dataset: store.getDataset(), parametros: store.getParametros(), relatorio });
 }

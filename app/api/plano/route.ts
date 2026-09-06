@@ -2,51 +2,71 @@ import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { extrairFacets, filtrarPlano, ordenarPlano, paginar } from "@/lib/query/plano";
 import { LinhaPlano } from "@/lib/engine/types";
+import { carteira } from "@/lib/store/carteira";
+import { analisesStore } from "@/lib/store/analises";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const versionId = sp.get("versionId") ?? undefined;
-  const versao = store.getVersao(versionId);
-  if (!versao) return NextResponse.json({ erro: "versão não encontrada" }, { status: 404 });
-  const params = versao.parametros;
-  const todas = versao.resultado.linhas;
+  // O plano vem da memória ou do armazenamento — a tela não precisa saber.
+  const plano = await store.obterPlano(sp.get("analiseId") ?? undefined);
+  if (!plano)
+    return NextResponse.json({ erro: "nenhuma análise rodada ainda", semAnalise: true }, { status: 404 });
 
+  const params = plano.parametros;
+  const todas = plano.linhas;
   const num = (k: string) => (sp.get(k) ? Number(sp.get(k)) : null);
+
   const filtradas = filtrarPlano(todas, {
-    cobertura: (sp.get("cobertura") as "total" | "acima90") ?? "total",
+    cobertura: (sp.get("cobertura") as "total" | "acima_limite") ?? "total",
     limiteDias: params.limiteCoberturaDias,
-    cd: num("cd"),
+    cdOrigem: num("origem"),
+    cdDestino: num("destino"),
     categoria: sp.get("categoria"),
     fornecedor: sp.get("fornecedor"),
     comprador: sp.get("comprador"),
     analista: sp.get("analista"),
     status: sp.get("status"),
     q: sp.get("q"),
+    soImediata: sp.get("soImediata") === "true",
   });
 
-  const sortCampo = (sp.get("sort") as keyof LinhaPlano | "valorTotal") ?? "valorTotal";
-  const ordenadas = ordenarPlano(filtradas, { campo: sortCampo, dir: (sp.get("dir") as "asc" | "desc") ?? "desc" });
+  const campo = (sp.get("sort") as keyof LinhaPlano) ?? "valorTotal";
+  const ordenadas = ordenarPlano(filtradas, { campo, dir: (sp.get("dir") as "asc" | "desc") ?? "desc" });
 
   const page = Number(sp.get("page") ?? 1);
   const pageSize = Math.min(500, Number(sp.get("pageSize") ?? 100));
   const pagina = paginar(ordenadas, page, pageSize);
 
-  // Aprovações da versão para marcar as linhas.
-  const aprovadas = new Set(store.getAprovacoes(versao.id).map((a) => a.chave));
-  const itens = pagina.itens.map((l) => ({ ...l, aprovada: aprovadas.has(`${l.cdDestino}:${l.idSku}`) }));
+  // Marca as linhas que já estão na carteira desta análise.
+  const aprovadas = new Set(
+    (await carteira.listar({ status: "todas", limite: 5000 }))
+      .filter((x) => x.analiseId === plano.id && x.status !== "cancelada")
+      .map((x) => `${x.cdOrigem}>${x.cdDestino}|${x.codigoProduto}`),
+  );
+
+  const totaisFiltro = filtradas.reduce(
+    (acc, l) => {
+      acc.qtd += l.transfTotal;
+      acc.valor += l.valorTotal;
+      acc.imediata += l.valorImediata;
+      acc.fiscal += l.impactoFiscal;
+      return acc;
+    },
+    { qtd: 0, valor: 0, imediata: 0, fiscal: 0 },
+  );
 
   return NextResponse.json({
-    versaoId: versao.id,
-    modelo: params.modelo ?? "drp",
-    meses: params.horizonteMeses,
-    cdOrigem: params.cdOrigem,
+    analiseId: plano.id,
+    modoDemanda: params.modoDemanda,
+    meses: plano.meses,
     facets: extrairFacets(todas),
+    totaisFiltro,
     total: pagina.total,
     page: pagina.page,
     pageSize: pagina.pageSize,
     totalPaginas: pagina.totalPaginas,
-    itens,
+    itens: pagina.itens.map((l) => ({ ...l, naCarteira: aprovadas.has(`${l.rota}|${l.codigoProduto}`) })),
   });
 }

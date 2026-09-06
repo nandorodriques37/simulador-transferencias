@@ -1,390 +1,818 @@
 import { describe, expect, it } from "vitest";
 import {
-  calcular,
+  calcularRede,
   cascataCumsum,
   cobertura,
   excessoTransferivel,
-  indexarObjetivos,
+  fatorCapacidade,
   indexarPedidos,
+  necessidadeSaldoIdeal,
+  nivelarPorCobertura,
+  regrasEfetivas,
   precoUnitario,
 } from "./calc";
-import { ObjetivoDestino, Parametros, PedidoProjetado, PosicaoEstoque } from "./types";
+import {
+  CapacidadeRede,
+  capacidadeVazia,
+  chaveCdProduto,
+  Compromissos,
+  compromissosVazios,
+  LinhaBase,
+  ParametrosRede,
+  PedidoProjetado,
+} from "./types";
 
-// Cascata de referência ITERATIVA (pseudocódigo original) para cruzar com a
-// implementação vetorizada por cumsum.
-function cascataIterativa(pedidos: number[], excesso: number): number[] {
-  let saldo = excesso;
-  return pedidos.map((p) => {
-    const t = Math.min(p, saldo);
-    saldo -= t;
-    return t;
-  });
-}
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
 
-const MESES = ["2026_07", "2026_08", "2026_09"];
-const CDS = [1, 9, 2, 8, 7];
-
-const paramsBase: Parametros = {
-  modelo: "drp",
-  cdOrigem: 10,
-  prioridadeCds: CDS,
-  horizonteMeses: MESES,
-  aliquotaFiscal: { 1: 0.052, 9: 0.015 }, // CD2/8/7 indefinidos
-  fatorSegurancaImediata: 0.5,
-  limiteCoberturaDias: 90,
-};
-
-const paramsObjetivo: Parametros = { ...paramsBase, modelo: "estoque_objetivo" };
-
-function sku(p: Partial<PosicaoEstoque>): PosicaoEstoque {
+function linha(cd: number, codigo: number, over: Partial<LinhaBase> = {}): LinhaBase {
   return {
-    idSku: "10-1",
-    deposito: 10,
-    codigoProduto: 1,
-    produto: "PROD",
+    idSku: `${cd}-${codigo}`,
+    cd,
+    codigoProduto: codigo,
+    produto: `PROD ${codigo}`,
     estoqueDisponivel: 0,
     estoqueObjetivo: 0,
     quantidadePendente: 0,
     vendaMedia3m: 0,
-    custoReposicao: 0,
-    precoLista: 0,
-    embCompra: 0,
+    custoReposicao: 10,
+    precoLista: 15,
+    embCompra: 10,
     fornecedor: "F",
     comprador: "C",
     analista: "A",
-    categoriaN1: "",
-    categoriaN2: "",
-    categoriaN3: "",
-    categoriaN4: "",
-    ...p,
+    categoriaN1: "N1",
+    categoriaN2: "N2",
+    categoriaN3: "N3",
+    categoriaN4: "N4",
+    ...over,
   };
 }
 
-describe("preço de valorização (REGRA 1)", () => {
-  it("usa custo de reposição quando != 0", () => {
-    expect(precoUnitario(sku({ custoReposicao: 10, precoLista: 99 }))).toBe(10);
+function params(over: Partial<ParametrosRede> = {}): ParametrosRede {
+  return {
+    modoDemanda: "saldo_ideal",
+    origens: [10],
+    destinos: [1, 2],
+    horizonteMeses: ["2026_09", "2026_10"],
+    aliquotas: {},
+    fatorSegurancaImediata: 0.5,
+    limiteCoberturaDias: 90,
+    considerarAprovadas: true,
+    considerarPendenteOrigem: true,
+    limitesCoberturaAtivos: true,
+    coberturaMaxDestinoDias: 0,
+    coberturaMinDestinoDias: 0,
+    estrategiaDestino: "prioridade",
+    limitesEmbarqueAtivos: true,
+    arredondarCaixaFechada: false,
+    minUnidadesLinha: 0,
+    minValorLinha: 0,
+    minValorRota: 0,
+    capacidade: capacidadeVazia(),
+    ...over,
+  };
+}
+
+const rodar = (
+  base: LinhaBase[],
+  p: ParametrosRede,
+  pedidos: PedidoProjetado[] = [],
+  comp: Compromissos = compromissosVazios(),
+) => calcularRede(base, indexarPedidos(pedidos), p, comp);
+
+// --------------------------------------------------------------------------
+
+describe("regras unitárias", () => {
+  it("preço usa o custo de reposição e cai para o preço de lista quando é 0", () => {
+    expect(precoUnitario(linha(10, 1, { custoReposicao: 7, precoLista: 9 }))).toBe(7);
+    expect(precoUnitario(linha(10, 1, { custoReposicao: 0, precoLista: 9 }))).toBe(9);
   });
-  it("cai para preço de lista quando custo == 0", () => {
-    expect(precoUnitario(sku({ custoReposicao: 0, precoLista: 99 }))).toBe(99);
+
+  it("excesso transferível protege venda média e estoque objetivo", () => {
+    const l = linha(10, 1, { estoqueDisponivel: 500, quantidadePendente: 100, vendaMedia3m: 200, estoqueObjetivo: 150 });
+    expect(excessoTransferivel(l)).toBe(250);
+  });
+
+  it("excesso nunca é negativo", () => {
+    const l = linha(10, 1, { estoqueDisponivel: 10, vendaMedia3m: 100, estoqueObjetivo: 50 });
+    expect(excessoTransferivel(l)).toBe(0);
+  });
+
+  it("necessidade do destino é o que falta para o objetivo, já com o pendente", () => {
+    expect(necessidadeSaldoIdeal(linha(1, 1, { estoqueObjetivo: 300, estoqueDisponivel: 100, quantidadePendente: 50 }))).toBe(150);
+    expect(necessidadeSaldoIdeal(linha(1, 1, { estoqueObjetivo: 100, estoqueDisponivel: 400 }))).toBe(0);
+  });
+
+  it("cobertura em dias e status", () => {
+    expect(cobertura(linha(10, 1, { estoqueDisponivel: 300, vendaMedia3m: 100 }), 90).dias).toBe(90);
+    expect(cobertura(linha(10, 1, { estoqueDisponivel: 400, vendaMedia3m: 100 }), 90).status).toBe("Acima de 90 dias");
+    expect(cobertura(linha(10, 1, { estoqueDisponivel: 10, vendaMedia3m: 0 }), 90).status).toBe("Sem giro");
+  });
+
+  it("cascata cumsum equivale ao laço guloso sequencial", () => {
+    const demanda = [30, 40, 50];
+    const transf = cascataCumsum(demanda, 60);
+    expect(transf).toEqual([30, 30, 0]);
+    let saldo = 60;
+    const esperado = demanda.map((d) => {
+      const t = Math.min(d, saldo);
+      saldo -= t;
+      return t;
+    });
+    expect(transf).toEqual(esperado);
   });
 });
 
-describe("excesso transferível (REGRA 2)", () => {
-  it("soma pendente, protege venda média e objetivo", () => {
-    // 100 + 20 - 30 - 40 = 50
-    expect(excessoTransferivel(sku({ estoqueDisponivel: 100, quantidadePendente: 20, vendaMedia3m: 30, estoqueObjetivo: 40 }))).toBe(50);
-  });
-  it("nunca negativo", () => {
-    expect(excessoTransferivel(sku({ estoqueDisponivel: 10, estoqueObjetivo: 100 }))).toBe(0);
-  });
-});
-
-describe("cascata vetorizada == iterativa", () => {
-  const casos: [number[], number][] = [
-    [[30, 160, 250, 0, 0], 74], // exemplo real (SKU 10-3858): cobre só o CD1 de julho
-    [[10, 20, 30, 40, 50], 55],
-    [[0, 0, 0, 0, 0], 100],
-    [[100, 100], 0],
-    [[5, 5, 5], 12],
-    [[1000], 999.5],
+describe("rede — modo saldo ideal", () => {
+  const base = [
+    linha(10, 100, { estoqueDisponivel: 1000, vendaMedia3m: 0, estoqueObjetivo: 0 }), // excesso 1000
+    linha(1, 100, { estoqueObjetivo: 400 }), // precisa de 400
+    linha(2, 100, { estoqueObjetivo: 900 }), // precisa de 900
   ];
-  it.each(casos)("pedidos=%j excesso=%d", (pedidos, excesso) => {
-    expect(cascataCumsum(pedidos, excesso)).toEqual(cascataIterativa(pedidos, excesso));
+
+  it("atende os destinos na ordem de prioridade escolhida", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1, 2] }));
+    const cd1 = r.linhas.find((l) => l.cdDestino === 1)!;
+    const cd2 = r.linhas.find((l) => l.cdDestino === 2)!;
+    expect(cd1.transfSaldo).toBe(400); // destino 1 primeiro: atendido integralmente
+    expect(cd2.transfSaldo).toBe(600); // sobra do excesso vai ao destino 2
   });
 
-  it("reproduz o exemplo da planilha (10-3858): 74 unidades só no CD1 de julho", () => {
-    // pedidos julho: CD1=30, CD9=160, CD2=250; excesso=74 -> transf CD1=30, CD9=44
-    const t = cascataCumsum([30, 160, 250, 0, 0], 74);
-    expect(t).toEqual([30, 44, 0, 0, 0]);
-    expect(t.reduce((a, b) => a + b, 0)).toBe(74); // sem sobra
+  it("inverter a ordem dos destinos muda quem é atendido primeiro", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [2, 1] }));
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(900);
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(100);
   });
-});
 
-describe("cobertura (REGRA 7)", () => {
-  it("venda zero com estoque => sem giro (9999)", () => {
-    const c = cobertura(sku({ estoqueDisponivel: 100, vendaMedia3m: 0 }), 90);
-    expect(c.dias).toBe(9999);
-    expect(c.status).toBe("Sem giro");
-  });
-  it("venda zero sem estoque => 0", () => {
-    expect(cobertura(sku({ estoqueDisponivel: 0, vendaMedia3m: 0 }), 90).dias).toBe(0);
-  });
-  it("classifica acima de 90 dias", () => {
-    // (300+0)*30/30 = 300 dias
-    const c = cobertura(sku({ estoqueDisponivel: 300, vendaMedia3m: 30 }), 90);
-    expect(c.dias).toBe(300);
-    expect(c.status).toBe("Acima de 90 dias");
-  });
-});
+  it("a sequência de origens define quem escoa primeiro (demanda é compartilhada)", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300 }),
+      linha(9, 100, { estoqueDisponivel: 300 }),
+      linha(1, 100, { estoqueObjetivo: 400 }),
+    ];
+    const r1 = rodar(b, params({ origens: [10, 9], destinos: [1] }));
+    expect(r1.linhas.find((l) => l.cdOrigem === 10)!.transfSaldo).toBe(300);
+    expect(r1.linhas.find((l) => l.cdOrigem === 9)!.transfSaldo).toBe(100);
 
-describe("motor completo — invariante de reconciliação", () => {
-  it("soma(transf) + sobra final == excesso para todo SKU", () => {
-    const posicao: PosicaoEstoque[] = Array.from({ length: 50 }, (_, i) =>
-      sku({
-        idSku: `10-${i}`,
-        codigoProduto: i,
-        estoqueDisponivel: (i * 37) % 500,
-        quantidadePendente: (i * 13) % 100,
-        vendaMedia3m: (i * 7) % 60,
-        estoqueObjetivo: (i * 11) % 80,
-        custoReposicao: 1 + (i % 5),
-        embCompra: (i % 4) + 1,
-      }),
+    const r2 = rodar(b, params({ origens: [9, 10], destinos: [1] }));
+    expect(r2.linhas.find((l) => l.cdOrigem === 9)!.transfSaldo).toBe(300);
+    expect(r2.linhas.find((l) => l.cdOrigem === 10)!.transfSaldo).toBe(100);
+  });
+
+  it("um CD nunca transfere para si mesmo, mesmo estando nas duas listas", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueDisponivel: 50, estoqueObjetivo: 600 }),
+    ];
+    const r = rodar(b, params({ origens: [10, 1], destinos: [10, 1] }));
+    expect(r.linhas.every((l) => l.cdOrigem !== l.cdDestino)).toBe(true);
+    expect(r.reconciliacao.autoTransferencias).toBe(0);
+  });
+
+  it("nenhum destino recebe mais que a necessidade e nenhuma origem envia mais que o excesso", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1, 2] }));
+    expect(r.reconciliacao.invarianteOk).toBe(true);
+    expect(r.destinos.find((d) => d.cd === 1)!.atendidoQtd).toBeLessThanOrEqual(400);
+    expect(r.origens[0].transferidoQtd).toBeLessThanOrEqual(r.origens[0].excessoQtd);
+  });
+
+  it("valoriza pelo preço da origem e calcula o impacto fiscal da rota", () => {
+    const r = rodar(
+      base,
+      params({ origens: [10], destinos: [1], aliquotas: { "10>1": 0.05 } }),
     );
-    const pedidos: PedidoProjetado[] = [];
-    for (const m of MESES)
-      for (const cd of CDS)
-        for (let i = 0; i < 50; i++)
-          pedidos.push({ anoMes: m, cdDestino: cd, codigoProduto: i, pedido: (i * cd * (m.endsWith("07") ? 3 : 1)) % 90 });
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    expect(res.reconciliacao.invarianteOk).toBe(true);
-    expect(res.reconciliacao.maiorDivergencia).toBeLessThan(1e-6);
+    const l = r.linhas[0];
+    expect(l.precoUnitario).toBe(10);
+    expect(l.valorTotal).toBe(4000);
+    expect(l.impactoFiscal).toBeCloseTo(200, 6);
+    expect(r.meta.impactoFiscalTotal).toBeCloseTo(200, 6);
+  });
+
+  it("aponta as rotas com transferência e sem alíquota definida", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1, 2] }));
+    expect(r.meta.rotasSemAliquota).toEqual(["10>1", "10>2"]);
   });
 });
 
-describe("casos de borda", () => {
-  it("preço zero cai para lista e ainda valoriza", () => {
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 0, precoLista: 10, embCompra: 10 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 40 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    expect(res.linhas[0].precoUnitario).toBe(10);
-    expect(res.linhas[0].valorTransfMes[0]).toBe(400);
+describe("rede — modo pedidos (cascata mês → destino)", () => {
+  const base = [
+    linha(10, 100, { estoqueDisponivel: 1000 }),
+    linha(1, 100, {}),
+    linha(2, 100, {}),
+  ];
+  const pedidos: PedidoProjetado[] = [
+    { anoMes: "2026_09", cdDestino: 1, codigoProduto: 100, pedido: 300 },
+    { anoMes: "2026_09", cdDestino: 2, codigoProduto: 100, pedido: 300 },
+    { anoMes: "2026_10", cdDestino: 1, codigoProduto: 100, pedido: 300 },
+    { anoMes: "2026_10", cdDestino: 2, codigoProduto: 100, pedido: 300 },
+  ];
+
+  it("consome o mês 1 de todos os destinos antes do mês 2", () => {
+    const r = rodar(base, params({ modoDemanda: "pedidos", origens: [10], destinos: [1, 2] }), pedidos);
+    const cd1 = r.linhas.find((l) => l.cdDestino === 1)!;
+    const cd2 = r.linhas.find((l) => l.cdDestino === 2)!;
+    // 1000 un: 300 (set/CD1) + 300 (set/CD2) + 300 (out/CD1) + 100 (out/CD2)
+    expect(cd1.transfMes).toEqual([300, 300]);
+    expect(cd2.transfMes).toEqual([300, 100]);
   });
 
-  it("emb_compra zero => caixas zero, sem crash", () => {
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 5, embCompra: 0 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 40 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    expect(res.linhas[0].transfCaixasMes[0]).toBe(0);
-    expect(res.linhas[0].imediataCaixas).toBe(0);
-    expect(res.linhas[0].qtdImediataArredondada).toBe(0);
+  it("no modo pedidos o saldo ideal é ignorado (só pedidos futuros contam)", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, { estoqueObjetivo: 5000 })];
+    const r = rodar(b, params({ modoDemanda: "pedidos", origens: [10], destinos: [1] }), []);
+    expect(r.linhas).toHaveLength(0);
+    expect(r.destinos[0].necessidadeQtd).toBe(0);
   });
 
-  it("SKU sem pedido em nenhum CD => nenhuma linha, mas conta no excesso", () => {
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 5 })];
-    const res = calcular(posicao, indexarPedidos([]), paramsBase);
-    expect(res.linhas.length).toBe(0);
-    expect(res.meta.excessoTotalRs).toBe(500);
+  it("a transferência imediata sai do mês 1 e respeita o fator de segurança", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 1000, vendaMedia3m: 400, embCompra: 10 }), linha(1, 100, {})];
+    // excesso = 1000 - 400 = 600 ; disponível hoje = 1000 - 400*0,5 = 800
+    const r = rodar(
+      b,
+      params({ modoDemanda: "pedidos", origens: [10], destinos: [1], horizonteMeses: ["2026_09"] }),
+      [{ anoMes: "2026_09", cdDestino: 1, codigoProduto: 100, pedido: 500 }],
+    );
+    const l = r.linhas[0];
+    expect(l.transfMes).toEqual([500]);
+    expect(l.qtdImediata).toBe(500);
+    expect(l.imediataCaixas).toBe(50);
+    expect(l.qtdImediataArredondada).toBe(500);
   });
+});
 
-  it("excesso menor que o primeiro pedido => transferência parcial e sobra zero", () => {
-    const posicao = [sku({ estoqueDisponivel: 20, custoReposicao: 1 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 100 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    expect(res.linhas[0].transfMes[0]).toBe(20); // limitado pelo excesso
-  });
-
-  it("sobra integral no mês 3 (sem demanda nos meses 1 e 2)", () => {
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 1 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[2], cdDestino: 1, codigoProduto: 1, pedido: 30 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    const linha = res.linhas[0];
-    expect(linha.transfMes).toEqual([0, 0, 30]);
-  });
-
-  it("transferência imediata respeita fator de segurança e caixa fechada", () => {
-    // disp=100, vmed=40, fs=0.5 => dispHoje = 100 - 20 = 80
-    // transfM1 = min(pedido 90, excesso). excesso = 100+0-40-0 = 60 => transfM1=60
-    // qtdImediata = min(60, 80) = 60 ; emb=10 => caixas = ROUNDDOWN(60/10) = 6 => 60
-    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 10 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 90 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    const l = res.linhas[0];
-    expect(l.qtdTransfImediata).toBe(60);
-    expect(l.imediataCaixas).toBe(6);
-    expect(l.qtdImediataArredondada).toBe(60);
-    expect(l.valorTransfImediata).toBe(120);
-  });
-
-  it("transferência imediata em caixas arredonda PARA BAIXO (caixa fechada)", () => {
-    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60 => transfM1=60
-    // qtdImediata = min(60, 80) = 60 ; emb=25 => ROUNDDOWN(60/25) = 2 (não 3) => 50
-    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 25 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 90 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    const l = res.linhas[0];
-    expect(l.qtdTransfImediata).toBe(60);
-    expect(l.imediataCaixas).toBe(2);
-    expect(l.qtdImediataArredondada).toBe(50);
-    // valor imediato = unidades a transferir (50) * preço (2)
-    expect(l.valorTransfImediata).toBe(100);
-  });
-
-  it("quantidade imediata menor que 1 caixa => imediata em cx é ZERO", () => {
-    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60 => transfM1 = min(30,60)=30
-    // qtdImediata = min(30, 80) = 30 ; emb=50 => 30 < 50 => ROUNDDOWN(30/50) = 0
-    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 50 })];
-    const pedidos: PedidoProjetado[] = [{ anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 30 }];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    const l = res.linhas[0];
-    expect(l.qtdTransfImediata).toBe(30);
+describe("transferência imediata em caixa fechada", () => {
+  it("menos de uma caixa não sai (arredonda para baixo)", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 100, embCompra: 50 }), linha(1, 100, { estoqueObjetivo: 30 })];
+    const r = rodar(b, params({ origens: [10], destinos: [1] }));
+    const l = r.linhas[0];
+    expect(l.transfSaldo).toBe(30);
     expect(l.imediataCaixas).toBe(0);
-    expect(l.qtdImediataArredondada).toBe(0);
-    // sem caixa fechada => nada a transferir => valor imediato zero
-    expect(l.valorTransfImediata).toBe(0);
+    expect(l.valorImediata).toBe(0);
+  });
+
+  it("a capacidade imediata da origem é rateada entre os destinos na ordem", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, vendaMedia3m: 400, embCompra: 1 }),
+      linha(1, 100, { estoqueObjetivo: 600 }),
+      linha(2, 100, { estoqueObjetivo: 600 }),
+    ];
+    // excesso = 600 ; disponível hoje = 1000 - 200 = 800 (só cobre o 1º destino)
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2] }));
+    const somaImediata = r.linhas.reduce((a, l) => a + l.qtdImediata, 0);
+    expect(somaImediata).toBeLessThanOrEqual(800);
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.qtdImediata).toBe(600);
   });
 });
 
-describe("CDs configuráveis (origem e destinos)", () => {
-  it("exclui o CD de origem da lista de destinos", () => {
-    const posicao = [sku({ estoqueDisponivel: 1000, custoReposicao: 1 })];
-    const pedidos: PedidoProjetado[] = [
-      { anoMes: MESES[0], cdDestino: 10, codigoProduto: 1, pedido: 500 }, // origem — deve ser ignorado
-      { anoMes: MESES[0], cdDestino: 3, codigoProduto: 1, pedido: 200 },
-    ];
-    // prioridade inclui o próprio 10 por engano + um CD novo (3)
-    const res = calcular(posicao, indexarPedidos(pedidos), { ...paramsBase, prioridadeCds: [10, 3, 1] });
-    expect(res.resumo.some((r) => r.cdDestino === 10)).toBe(false);
-    const cd3 = res.linhas.find((l) => l.cdDestino === 3)!;
-    expect(cd3.transfMes[0]).toBe(200);
+describe("sugestões aprovadas em aberto (compromissos)", () => {
+  const base = [
+    linha(10, 100, { estoqueDisponivel: 1000 }),
+    linha(1, 100, { estoqueObjetivo: 1000 }),
+  ];
+
+  it("descontam o excesso da origem e o trânsito do destino", () => {
+    const comp = compromissosVazios();
+    comp.saidaOrigem.set(chaveCdProduto(10, 100), 400);
+    comp.entradaDestino.set(chaveCdProduto(1, 100), 400);
+    const r = rodar(base, params({ origens: [10], destinos: [1] }), [], comp);
+    expect(r.origens[0].excessoQtd).toBe(600);
+    expect(r.destinos[0].necessidadeQtd).toBe(600);
+    expect(r.linhas[0].transfSaldo).toBe(600);
   });
 
-  it("suporta rede maior (11 CDs) sem código fixo", () => {
-    const destinos = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11];
-    const posicao = [sku({ estoqueDisponivel: 100000, custoReposicao: 1 })];
-    const pedidos: PedidoProjetado[] = destinos.map((cd) => ({ anoMes: MESES[0], cdDestino: cd, codigoProduto: 1, pedido: 10 }));
-    const res = calcular(posicao, indexarPedidos(pedidos), { ...paramsBase, cdOrigem: 10, prioridadeCds: destinos });
-    expect(res.resumo.length).toBe(10);
-    expect(res.linhas.length).toBe(10);
+  it("podem ser ignorados quando a análise pede o cenário cheio", () => {
+    const comp = compromissosVazios();
+    comp.saidaOrigem.set(chaveCdProduto(10, 100), 400);
+    comp.entradaDestino.set(chaveCdProduto(1, 100), 400);
+    const r = rodar(base, params({ origens: [10], destinos: [1], considerarAprovadas: false }), [], comp);
+    expect(r.linhas[0].transfSaldo).toBe(1000);
+  });
+
+  it("no modo pedidos o trânsito abate os meses mais próximos primeiro", () => {
+    const comp = compromissosVazios();
+    comp.entradaDestino.set(chaveCdProduto(1, 100), 250);
+    const r = rodar(
+      [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, {})],
+      params({ modoDemanda: "pedidos", origens: [10], destinos: [1] }),
+      [
+        { anoMes: "2026_09", cdDestino: 1, codigoProduto: 100, pedido: 200 },
+        { anoMes: "2026_10", cdDestino: 1, codigoProduto: 100, pedido: 200 },
+      ],
+      comp,
+    );
+    // 250 em trânsito zeram set (200) e abatem 50 de out.
+    expect(r.linhas[0].transfMes).toEqual([0, 150]);
   });
 });
 
-describe("resumo executivo e impacto fiscal", () => {
-  it("agrega por CD e aplica alíquota; sinaliza alíquota incompleta", () => {
-    const posicao = [
-      sku({ idSku: "10-1", codigoProduto: 1, estoqueDisponivel: 1000, custoReposicao: 10 }),
+describe("resumos e cobertura da necessidade", () => {
+  it("consolida origens, destinos e rotas", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 500 }),
+      linha(9, 100, { estoqueDisponivel: 500 }),
+      linha(1, 100, { estoqueObjetivo: 300 }),
+      linha(2, 100, { estoqueObjetivo: 400 }),
     ];
-    const pedidos: PedidoProjetado[] = [
-      { anoMes: MESES[0], cdDestino: 1, codigoProduto: 1, pedido: 100 }, // valor 1000, fiscal 52
-      { anoMes: MESES[0], cdDestino: 2, codigoProduto: 1, pedido: 100 }, // CD2 sem alíquota
-    ];
-    const res = calcular(posicao, indexarPedidos(pedidos), paramsBase);
-    const cd1 = res.resumo.find((r) => r.cdDestino === 1)!;
-    expect(cd1.valorTransfMes[0]).toBe(1000);
-    expect(cd1.impactoFiscal).toBeCloseTo(52, 6);
-    expect(res.meta.alertaAliquotasIncompletas).toContain(2);
-  });
-});
-
-describe("modelo estoque objetivo (modelo 2 / híbrido)", () => {
-  it("indexarObjetivos soma saldos repetidos por (cd, produto)", () => {
-    const idx = indexarObjetivos([
-      { cdDestino: 1, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 30 },
-      { cdDestino: 1, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 20 },
-      { cdDestino: 9, codigoProduto: 5, descricao: "", saldoEstoqueObjetivo: 40 },
-    ]);
-    expect(idx.get("1|5")).toBe(50);
-    expect(idx.get("9|5")).toBe(40);
+    const r = rodar(b, params({ origens: [10, 9], destinos: [1, 2] }));
+    expect(r.origens.map((o) => o.cd)).toEqual([10, 9]);
+    expect(r.destinos.map((d) => d.cd)).toEqual([1, 2]);
+    // CD10 (500) atende CD1 (300) e parte do CD2 (200); o CD9 completa o CD2.
+    expect(r.rotas.map((x) => x.rota).sort()).toEqual(["10>1", "10>2", "9>2"].sort());
+    expect(r.destinos.every((d) => d.cobertura === 1)).toBe(true);
+    // Origem 10 (500) cobre toda a necessidade (700)? Não: sobra 200 para o CD9.
+    expect(r.origens[0].transferidoQtd).toBe(500);
+    expect(r.origens[1].transferidoQtd).toBe(200);
   });
 
-  it("distribui o excesso para atender o saldo objetivo por CD, sem quebra mensal", () => {
-    // excesso = 100 (disp 100, custo 1). objetivos: CD1=30, CD9=160 (prioridade 1,9,...)
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 1, embCompra: 10 })];
-    const objetivos: ObjetivoDestino[] = [
-      { cdDestino: 1, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 30 },
-      { cdDestino: 9, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 160 },
-    ];
-    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
-
-    const cd1 = res.linhas.find((l) => l.cdDestino === 1)!;
-    const cd9 = res.linhas.find((l) => l.cdDestino === 9)!;
-    // CD1 atende 30 (integral); CD9 recebe o restante do excesso: 100-30 = 70.
-    expect(cd1.transfObjetivo).toBe(30);
-    expect(cd9.transfObjetivo).toBe(70);
-    // meses sempre zerados neste modelo.
-    expect(cd1.transfMes).toEqual([0, 0, 0]);
-    expect(cd1.valorTransfMes).toEqual([0, 0, 0]);
-    // valor do objetivo = qtd * preço.
-    expect(cd1.valorTransfObjetivo).toBe(30);
-    expect(cd9.valorTransfObjetivo).toBe(70);
-    // total da linha reflete o objetivo.
-    expect(cd1.transfTotal).toBe(30);
-    // caixas do objetivo = ROUND(30/10) = 3.
-    expect(cd1.transfObjetivoCaixas).toBe(3);
-  });
-
-  it("CD sem saldo objetivo não gera linha (materialidade)", () => {
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 1 })];
-    const objetivos: ObjetivoDestino[] = [
-      { cdDestino: 2, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 40 },
-    ];
-    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
-    expect(res.linhas.length).toBe(1);
-    expect(res.linhas[0].cdDestino).toBe(2);
-    expect(res.resumo.find((r) => r.cdDestino === 1)!.transfObjetivo).toBe(0);
-  });
-
-  it("transferência imediata atende o objetivo respeitando fator de segurança e caixa fechada", () => {
-    // disp=100, vmed=40, fs=0.5 => dispHoje = 80 ; excesso = 60
-    // objetivo CD1 = 50 => transfObjetivo = min(50, 60) = 50
-    // qtdImediata = min(50, 80) = 50 ; emb=10 => ROUNDDOWN(50/10)=5 => 50
-    const posicao = [sku({ estoqueDisponivel: 100, vendaMedia3m: 40, custoReposicao: 2, embCompra: 10 })];
-    const objetivos: ObjetivoDestino[] = [{ cdDestino: 1, codigoProduto: 1, descricao: "X", saldoEstoqueObjetivo: 50 }];
-    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
-    const l = res.linhas[0];
-    expect(l.transfObjetivo).toBe(50);
-    expect(l.qtdTransfImediata).toBe(50);
-    expect(l.imediataCaixas).toBe(5);
-    expect(l.qtdImediataArredondada).toBe(50);
-    expect(l.valorTransfImediata).toBe(100);
-  });
-
-  it("meta zera os meses e reporta o total do objetivo; invariante ok", () => {
-    const posicao = [
-      sku({ idSku: "10-1", codigoProduto: 1, estoqueDisponivel: 100, custoReposicao: 1 }),
-      sku({ idSku: "10-2", codigoProduto: 2, estoqueDisponivel: 50, custoReposicao: 2 }),
-    ];
-    const objetivos: ObjetivoDestino[] = [
-      { cdDestino: 1, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 30 },
-      { cdDestino: 9, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 200 },
-      { cdDestino: 1, codigoProduto: 2, descricao: "", saldoEstoqueObjetivo: 100 },
-    ];
-    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
-    expect(res.meta.modelo).toBe("estoque_objetivo");
-    expect(res.meta.valorTransfMesTotal).toEqual([0, 0, 0]);
-    // produto1: 30*1 + 70*1 = 100 ; produto2: 50*2 = 100 => 200
-    expect(res.meta.valorTransfObjetivoTotal).toBe(200);
-    expect(res.reconciliacao.invarianteOk).toBe(true);
-    expect(res.reconciliacao.maiorDivergencia).toBeLessThan(1e-6);
-  });
-
-  it("impacto fiscal considera o valor do objetivo", () => {
-    // CD1 aliquota 5.2% ; excesso 100 custo 10 ; objetivo CD1 = 40
-    const posicao = [sku({ estoqueDisponivel: 100, custoReposicao: 10 })];
-    const objetivos: ObjetivoDestino[] = [{ cdDestino: 1, codigoProduto: 1, descricao: "", saldoEstoqueObjetivo: 40 }];
-    const res = calcular(posicao, indexarPedidos([]), paramsObjetivo, {}, indexarObjetivos(objetivos));
-    const cd1 = res.resumo.find((r) => r.cdDestino === 1)!;
-    expect(cd1.valorTransfObjetivo).toBe(400); // 40 * 10
-    expect(cd1.impactoFiscal).toBeCloseTo(400 * 0.052, 6);
+  it("necessidade sem oferta fica em aberto no destino", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 100 }), linha(1, 100, { estoqueObjetivo: 500 })];
+    const r = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(r.destinos[0].aberto).toBe(400);
+    expect(r.destinos[0].cobertura).toBeCloseTo(0.2, 6);
   });
 });
 
 describe("performance", () => {
-  it("recalcula base grande (80k SKUs x 5 CDs x 3 meses) em < 10s", () => {
-    const N = 80000;
-    const posicao: PosicaoEstoque[] = new Array(N);
-    for (let i = 0; i < N; i++) {
-      posicao[i] = sku({
-        idSku: `10-${i}`,
-        codigoProduto: i,
-        estoqueDisponivel: (i % 900) + 50,
-        quantidadePendente: i % 40,
-        vendaMedia3m: i % 60,
-        estoqueObjetivo: i % 70,
-        custoReposicao: 1 + (i % 50),
-        embCompra: (i % 12) + 1,
-      });
+  it("processa uma rede de 6 CDs × 20 mil produtos em menos de 10 s", () => {
+    const cds = [10, 1, 2, 7, 8, 9];
+    const base: LinhaBase[] = [];
+    for (let i = 0; i < 20000; i++) {
+      const codigo = 1000 + i;
+      for (const cd of cds) {
+        const sobra = cd === 10;
+        base.push(
+          linha(cd, codigo, {
+            estoqueDisponivel: sobra ? 900 : 50,
+            estoqueObjetivo: sobra ? 100 : 400,
+            vendaMedia3m: 60,
+            custoReposicao: 12.5,
+            embCompra: 12,
+          }),
+        );
+      }
     }
-    const pedidos: PedidoProjetado[] = [];
-    for (const m of MESES)
-      for (const cd of CDS)
-        for (let i = 0; i < N; i += 3)
-          pedidos.push({ anoMes: m, cdDestino: cd, codigoProduto: i, pedido: (i * cd) % 120 });
-    const idx = indexarPedidos(pedidos);
-    const t = Date.now();
-    const res = calcular(posicao, idx, paramsBase);
-    const ms = Date.now() - t;
-    expect(res.reconciliacao.invarianteOk).toBe(true);
+    const t0 = Date.now();
+    const r = calcularRede(
+      base,
+      new Map(),
+      params({ origens: [10], destinos: [1, 2, 7, 8, 9] }),
+      compromissosVazios(),
+    );
+    const ms = Date.now() - t0;
+    expect(r.linhas.length).toBeGreaterThan(0);
+    expect(r.reconciliacao.invarianteOk).toBe(true);
     expect(ms).toBeLessThan(10000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regras de qualidade da necessidade, da oferta e do embarque
+// ---------------------------------------------------------------------------
+
+describe("teto e piso de cobertura no destino", () => {
+  it("teto limita a necessidade a N dias de cobertura (saldo ideal)", () => {
+    // CD1 vende 300/mês (10/dia) e tem objetivo inflado de 1000 un.
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 5000 }),
+      linha(1, 100, { estoqueObjetivo: 1000, vendaMedia3m: 300 }),
+    ];
+    const semTeto = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(semTeto.linhas[0].transfSaldo).toBe(1000);
+
+    const comTeto = rodar(b, params({ origens: [10], destinos: [1], coberturaMaxDestinoDias: 60 }));
+    expect(comTeto.linhas[0].transfSaldo).toBe(600); // 10/dia × 60 dias
+    expect(comTeto.destinos[0].necessidadeBrutaQtd).toBe(1000);
+    expect(comTeto.destinos[0].necessidadeQtd).toBe(600);
+  });
+
+  it("teto corta os pedidos do mês mais distante para o mais próximo", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 5000 }), linha(1, 100, { vendaMedia3m: 300 })];
+    const r = rodar(
+      b,
+      params({ modoDemanda: "pedidos", origens: [10], destinos: [1], coberturaMaxDestinoDias: 60 }),
+      [
+        { anoMes: "2026_09", cdDestino: 1, codigoProduto: 100, pedido: 400 },
+        { anoMes: "2026_10", cdDestino: 1, codigoProduto: 100, pedido: 400 },
+      ],
+    );
+    // Teto de 600 un: mantém set (400) e corta out para 200.
+    expect(r.linhas[0].transfMes).toEqual([400, 200]);
+  });
+
+  it("piso garante a demanda antirruptura quando o objetivo está zerado", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 5000 }),
+      linha(1, 100, { estoqueObjetivo: 0, estoqueDisponivel: 30, vendaMedia3m: 300 }),
+    ];
+    const semPiso = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(semPiso.linhas).toHaveLength(0);
+
+    const comPiso = rodar(b, params({ origens: [10], destinos: [1], coberturaMinDestinoDias: 30 }));
+    expect(comPiso.linhas[0].transfSaldo).toBe(270); // 10/dia × 30 dias − 30 em casa
+  });
+
+  it("SKU sem giro no destino fica fora do teto e do piso", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 400, vendaMedia3m: 0 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], coberturaMaxDestinoDias: 60, coberturaMinDestinoDias: 30 }));
+    expect(r.linhas[0].transfSaldo).toBe(400);
+  });
+});
+
+describe("excesso físico × excesso de planejamento", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 100, quantidadePendente: 900 }),
+    linha(1, 100, { estoqueObjetivo: 1000 }),
+  ];
+
+  it("por padrão o pendente entra no excesso", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(r.origens[0].excessoQtd).toBe(1000);
+    expect(r.linhas[0].transfSaldo).toBe(1000);
+  });
+
+  it("desligando o pendente, só o que está no CD é oferecido", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1], considerarPendenteOrigem: false }));
+    expect(r.origens[0].excessoQtd).toBe(100);
+    expect(r.linhas[0].transfSaldo).toBe(100);
+  });
+});
+
+describe("caixa fechada e materialidade", () => {
+  it("transfere só múltiplos da embalagem e o resto segue para o próximo destino", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 100, embCompra: 30 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+      linha(2, 100, { estoqueObjetivo: 100 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], arredondarCaixaFechada: true }));
+    const cd1 = r.linhas.find((l) => l.cdDestino === 1)!;
+    const cd2 = r.linhas.find((l) => l.cdDestino === 2)!;
+    expect(cd1.transfSaldo).toBe(30); // 1 caixa (pedia 50)
+    expect(cd1.perdaCaixaFechada).toBe(20);
+    expect(cd2.transfSaldo).toBe(60); // 2 caixas do saldo de 70
+    expect(cd1.transfSaldo % 30).toBe(0);
+    expect(cd2.transfSaldo % 30).toBe(0);
+  });
+
+  it("linha abaixo do mínimo de unidades não entra e libera o saldo", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+      linha(2, 100, { estoqueObjetivo: 200 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], minUnidadesLinha: 100 }));
+    expect(r.linhas.map((l) => l.cdDestino)).toEqual([2]);
+    expect(r.linhas[0].transfSaldo).toBe(200);
+  });
+
+  it("linha abaixo do mínimo em R$ não entra", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300, custoReposicao: 2 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], minValorLinha: 500 }));
+    expect(r.linhas).toHaveLength(0); // 50 × R$ 2 = R$ 100
+  });
+
+  it("rota abaixo da carga mínima é descartada do plano", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+      linha(2, 100, { estoqueObjetivo: 5 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], minValorRota: 1000 }));
+    // CD1 leva R$ 9.000; a rota 10>2 fica em R$ 50 e sai do plano.
+    expect(r.rotas.map((x) => x.rota)).toEqual(["10>1"]);
+    expect(r.linhas).toHaveLength(1);
+    expect(r.meta.valorTransfTotal).toBe(9000);
+  });
+});
+
+describe("nivelamento por dias de cobertura", () => {
+  it("distribui proporcional ao giro quando os destinos partem da mesma cobertura", () => {
+    expect(nivelarPorCobertura([600, 300], [0, 0], [10, 5], 300)).toEqual([200, 100]);
+  });
+
+  it("enche primeiro quem está mais descoberto", () => {
+    // CD1 tem 10 dias de cobertura; CD2 está zerado. 50 un sobem o CD2 a 10 dias.
+    expect(nivelarPorCobertura([600, 300], [100, 0], [10, 5], 50)).toEqual([0, 50]);
+  });
+
+  it("respeita o limite de necessidade de cada destino", () => {
+    const r = nivelarPorCobertura([100, 300], [0, 0], [10, 5], 400);
+    expect(r[0]).toBe(100);
+    expect(r[1]).toBe(300);
+  });
+
+  it("na análise, evita que o último destino da fila fique sem nada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 300, vendaMedia3m: 150 }),
+    ];
+    const estrita = rodar(b, params({ origens: [10], destinos: [1, 2] }));
+    expect(estrita.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(300);
+    expect(estrita.linhas.find((l) => l.cdDestino === 2)).toBeUndefined();
+
+    const nivelado = rodar(b, params({ origens: [10], destinos: [1, 2], estrategiaDestino: "nivelar_cobertura" }));
+    expect(nivelado.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(200);
+    expect(nivelado.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(100);
+    // Os dois terminam com a mesma cobertura (20 dias).
+    expect(nivelado.meta.qtdTransfTotal).toBe(300);
+  });
+
+  it("nivelamento também respeita caixa fechada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300, embCompra: 30 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 300, vendaMedia3m: 150 }),
+    ];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], estrategiaDestino: "nivelar_cobertura", arredondarCaixaFechada: true }),
+    );
+    for (const l of r.linhas) expect(l.transfTotal % 30).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capacidade operacional — expedição, recebimento e transporte
+// ---------------------------------------------------------------------------
+
+const capacidade = (over: Partial<CapacidadeRede> = {}): CapacidadeRede => ({
+  ...capacidadeVazia(),
+  ...over,
+});
+
+describe("fator de conversão da capacidade", () => {
+  const l = linha(10, 100, { embCompra: 12, unidadesPorPalete: 120, pesoUnitario: 0.5, cubagemUnitaria: 0.002 });
+
+  it("converte unidades para cada métrica", () => {
+    expect(fatorCapacidade(l, "unidades", 10)).toBe(1);
+    expect(fatorCapacidade(l, "caixas", 10)).toBeCloseTo(1 / 12, 9);
+    expect(fatorCapacidade(l, "paletes", 10)).toBeCloseTo(1 / 120, 9);
+    expect(fatorCapacidade(l, "peso", 10)).toBe(0.5);
+    expect(fatorCapacidade(l, "volume", 10)).toBe(0.002);
+    expect(fatorCapacidade(l, "valor", 10)).toBe(10);
+  });
+
+  it("devolve 0 quando o SKU não tem o dado da métrica", () => {
+    const sem = linha(10, 100, { embCompra: 0 });
+    expect(fatorCapacidade(sem, "paletes", 10)).toBe(0);
+    expect(fatorCapacidade(sem, "peso", 10)).toBe(0);
+    expect(fatorCapacidade(sem, "caixas", 10)).toBe(0);
+  });
+});
+
+describe("limite de recebimento no destino", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 1000 }),
+    linha(1, 100, { estoqueObjetivo: 600 }),
+    linha(2, 100, { estoqueObjetivo: 400 }),
+  ];
+
+  it("corta a transferência no teto de recebimento do CD", () => {
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ metrica: "unidades", porDestino: { 1: 250 } }) }),
+    );
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(250);
+    // O que o CD1 não pôde receber continua disponível para o CD2.
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(400);
+    const d1 = r.destinos.find((d) => d.cd === 1)!;
+    expect(d1.capacidadeLimite).toBe(250);
+    expect(d1.capacidadeUsada).toBe(250);
+    expect(d1.bloqueadoPorCapacidade).toBe(350);
+  });
+
+  it("aponta o gargalo no resultado", () => {
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porDestino: { 1: 250 } }) }),
+    );
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(350);
+    expect(r.meta.gargalos[0]).toEqual({ tipo: "destino", id: "CD 1", bloqueado: 350 });
+  });
+
+  it("sem limite, nada é barrado", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2] }));
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(0);
+    expect(r.meta.gargalos).toHaveLength(0);
+  });
+});
+
+describe("limite de expedição e de transporte", () => {
+  it("a origem não expede além da própria capacidade", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 600 }),
+      linha(2, 100, { estoqueObjetivo: 400 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porOrigem: { 10: 500 } }) }));
+    expect(r.meta.qtdTransfTotal).toBe(500);
+    expect(r.origens[0].capacidadeUsada).toBe(500);
+    expect(r.origens[0].bloqueadoPorCapacidade).toBeGreaterThan(0);
+  });
+
+  it("o limite da rota é independente do limite do CD", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 600 }),
+      linha(2, 100, { estoqueObjetivo: 400 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porRota: { "10>1": 100 } }) }));
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(100);
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(400);
+    expect(r.rotas.find((x) => x.rota === "10>1")!.bloqueadoPorCapacidade).toBe(500);
+  });
+
+  it("o menor dos três limites manda", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, { estoqueObjetivo: 900 })];
+    const r = rodar(
+      b,
+      params({
+        origens: [10],
+        destinos: [1],
+        capacidade: capacidade({ porOrigem: { 10: 700 }, porDestino: { 1: 300 }, porRota: { "10>1": 500 } }),
+      }),
+    );
+    expect(r.meta.qtdTransfTotal).toBe(300);
+  });
+});
+
+describe("capacidade em outras métricas", () => {
+  it("mede em paletes usando as unidades por palete do SKU", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, unidadesPorPalete: 100 }),
+      linha(1, 100, { estoqueObjetivo: 900, unidadesPorPalete: 100 }),
+    ];
+    // 3 paletes = 300 unidades.
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "paletes", porDestino: { 1: 3 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(300);
+  });
+
+  it("mede em peso", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, pesoUnitario: 2 }),
+      linha(1, 100, { estoqueObjetivo: 900, pesoUnitario: 2 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "peso", porDestino: { 1: 400 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(200); // 400 kg / 2 kg
+  });
+
+  it("SKU sem o dado da métrica não consome capacidade e é sinalizado", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, unidadesPorPalete: 0 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "paletes", porDestino: { 1: 1 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(900);
+    expect(r.meta.skusSemFatorCapacidade).toBe(1);
+  });
+
+  it("capacidade em R$ limita pelo valor transferido", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, custoReposicao: 10 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "valor", porDestino: { 1: 2000 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(200);
+    expect(r.linhas[0].valorTotal).toBe(2000);
+  });
+});
+
+describe("capacidade escassa e prioridade entre SKUs", () => {
+  const base = [
+    linha(10, 100, { estoqueDisponivel: 500, custoReposicao: 1 }), // barato
+    linha(1, 100, { estoqueObjetivo: 500, vendaMedia3m: 300 }),
+    linha(10, 200, { estoqueDisponivel: 500, custoReposicao: 50 }), // caro
+    linha(1, 200, { estoqueObjetivo: 500, vendaMedia3m: 30 }),
+  ];
+
+  it("por valor, o SKU de maior excesso em R$ ocupa a doca primeiro", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 }, prioridade: "valor" }) }));
+    const caro = r.linhas.find((l) => l.codigoProduto === 200);
+    expect(caro?.transfSaldo).toBe(500);
+    expect(r.linhas.find((l) => l.codigoProduto === 100)).toBeUndefined();
+  });
+
+  it("por urgência, quem tem menos dias de cobertura no destino passa na frente", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 }, prioridade: "urgencia" }) }));
+    // SKU 100 vende 300/mês no CD1 e está zerado: cobertura 0 dias.
+    expect(r.linhas.find((l) => l.codigoProduto === 100)?.transfSaldo).toBe(500);
+    expect(r.linhas.find((l) => l.codigoProduto === 200)).toBeUndefined();
+  });
+});
+
+describe("capacidade e sugestões já aprovadas", () => {
+  it("o que está aprovado e não faturado já ocupa a doca do destino", () => {
+    const comp = compromissosVazios();
+    comp.rotaProduto.set("10>1|100", 200);
+    const b = [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, { estoqueObjetivo: 900 })];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 } }) }),
+      [],
+      comp,
+    );
+    // 500 de capacidade − 200 já comprometidos = 300 disponíveis agora.
+    expect(r.linhas[0].transfSaldo).toBe(300);
+    expect(r.destinos[0].capacidadeComprometida).toBe(200);
+    expect(r.destinos[0].capacidadeUsada).toBe(500);
+  });
+});
+
+describe("capacidade no nivelamento e com caixa fechada", () => {
+  it("nivelando, o destino sem capacidade não recebe e o outro absorve", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 600 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+    ];
+    const r = rodar(
+      b,
+      params({
+        origens: [10],
+        destinos: [1, 2],
+        estrategiaDestino: "nivelar_cobertura",
+        capacidade: capacidade({ porDestino: { 1: 100 } }),
+      }),
+    );
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(100);
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(500);
+  });
+
+  it("o corte por capacidade respeita a caixa fechada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, embCompra: 12 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1], arredondarCaixaFechada: true, capacidade: capacidade({ porDestino: { 1: 250 } }) }),
+    );
+    expect(r.linhas[0].transfSaldo).toBe(240); // 20 caixas, não 250 unidades
+  });
+});
+
+describe("chaves gerais — desligar sem perder a configuração", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 1000, embCompra: 12 }),
+    linha(1, 100, { estoqueObjetivo: 900, vendaMedia3m: 300 }),
+  ];
+  const comTudo = params({
+    origens: [10],
+    destinos: [1],
+    coberturaMaxDestinoDias: 30,
+    arredondarCaixaFechada: true,
+    minUnidadesLinha: 50,
+    capacidade: capacidade({ porDestino: { 1: 120 } }),
+  });
+
+  it("com as regras ligadas, o menor limite manda", () => {
+    const r = rodar(b, comTudo);
+    expect(r.linhas[0].transfSaldo).toBe(120); // capacidade < teto de cobertura
+  });
+
+  it("desligar a capacidade libera o teto de cobertura", () => {
+    const r = rodar(b, { ...comTudo, capacidade: { ...comTudo.capacidade, ativa: false } });
+    expect(r.linhas[0].transfSaldo).toBe(300); // 10/dia × 30 dias, em caixa fechada
+  });
+
+  it("desligar o teto/piso mantém capacidade e caixa fechada", () => {
+    const r = rodar(b, { ...comTudo, limitesCoberturaAtivos: false });
+    expect(r.linhas[0].transfSaldo).toBe(120);
+    expect(r.destinos[0].necessidadeQtd).toBe(900);
+  });
+
+  it("desligar o embarque tira caixa fechada e mínimos", () => {
+    const semEmbarque = rodar(b, {
+      ...comTudo,
+      limitesEmbarqueAtivos: false,
+      capacidade: { ...comTudo.capacidade, porDestino: { 1: 125 } },
+    });
+    expect(semEmbarque.linhas[0].transfSaldo).toBe(125); // não arredonda para 120
+  });
+
+  it("desligar tudo devolve o cenário cru", () => {
+    const r = rodar(b, {
+      ...comTudo,
+      limitesCoberturaAtivos: false,
+      limitesEmbarqueAtivos: false,
+      capacidade: { ...comTudo.capacidade, ativa: false },
+    });
+    expect(r.linhas[0].transfSaldo).toBe(900);
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(0);
+  });
+
+  it("os valores continuam guardados no parâmetro depois de desligar", () => {
+    const desligado = { ...comTudo, limitesCoberturaAtivos: false };
+    expect(desligado.coberturaMaxDestinoDias).toBe(30);
+    expect(regrasEfetivas(desligado).coberturaMax).toBe(0);
+    expect(regrasEfetivas({ ...desligado, limitesCoberturaAtivos: true }).coberturaMax).toBe(30);
   });
 });

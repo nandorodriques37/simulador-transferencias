@@ -1,380 +1,1083 @@
 import {
-  chaveObjetivo,
+  CapacidadeRede,
+  capacidadeVazia,
+  chaveCdProduto,
   chavePedido,
+  chaveRota,
+  chaveRotaProduto,
+  MetricaCapacidade,
+  Compromissos,
+  compromissosVazios,
   FiltroCobertura,
+  LinhaBase,
   LinhaPlano,
-  ObjetivoDestino,
-  ObjetivoIndex,
-  Parametros,
+  ParametrosRede,
   PedidosIndex,
-  PosicaoEstoque,
   Reconciliacao,
-  ResultadoCalculo,
-  ResumoCd,
+  ResultadoRede,
+  ResumoDestino,
+  ResumoOrigem,
+  ResumoRota,
 } from "./types";
 
-// Excel-compatíveis (valores sempre >= 0 no modelo).
-const round = (x: number) => Math.floor(x + 0.5); // ROUND (half away from zero, x>=0)
+// Arredondamentos compatíveis com Excel (valores sempre >= 0 no modelo).
+const round = (x: number) => Math.floor(x + 0.5); // ROUND
 const roundDown = (x: number) => Math.floor(x + 1e-9); // ROUNDDOWN
-const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+const EPS = 1e-9;
 
-/**
- * Preço de valorização (REGRA 1): custo de reposição; se 0, usa preço de lista.
- */
-export function precoUnitario(sku: PosicaoEstoque): number {
-  return sku.custoReposicao !== 0 ? sku.custoReposicao : sku.precoLista;
+/** REGRA 1 — preço de valorização: custo de reposição; se 0, preço de lista. */
+export function precoUnitario(l: LinhaBase): number {
+  return l.custoReposicao !== 0 ? l.custoReposicao : l.precoLista;
 }
 
 /**
- * Excesso transferível (REGRA 2): protege 1 mês de venda média + estoque objetivo,
- * soma o pendente que ainda vai entrar.
+ * REGRA 2 — excesso transferível do CD quando ele age como ORIGEM.
+ * Protege 1 mês de venda média + o estoque objetivo do próprio CD.
+ *
+ * `comPendente = true` (padrão) soma o que ainda vai entrar — é o excesso de
+ * PLANEJAMENTO. `false` devolve o excesso FÍSICO: só o que já está no CD, que é
+ * o que de fato pode embarcar hoje.
  */
-export function excessoTransferivel(sku: PosicaoEstoque): number {
-  return Math.max(
-    sku.estoqueDisponivel + sku.quantidadePendente - sku.vendaMedia3m - sku.estoqueObjetivo,
-    0,
-  );
+export function excessoTransferivel(l: LinhaBase, comPendente = true): number {
+  const entrada = comPendente ? l.quantidadePendente : 0;
+  return Math.max(l.estoqueDisponivel + entrada - l.vendaMedia3m - l.estoqueObjetivo, 0);
 }
 
 /**
- * Cobertura de estoque em dias e classificação (REGRA 7).
+ * REGRA 3 — necessidade do CD quando ele age como DESTINO no modo
+ * "saldo_ideal": o que falta para chegar ao estoque objetivo, já considerando
+ * o que está pendente de entrada.
  */
-export function cobertura(
-  sku: PosicaoEstoque,
-  limiteDias: number,
-): { dias: number; status: string } {
-  const estoque = sku.estoqueDisponivel + sku.quantidadePendente;
-  if (sku.vendaMedia3m <= 0) {
+export function necessidadeSaldoIdeal(l: LinhaBase): number {
+  return Math.max(l.estoqueObjetivo - l.estoqueDisponivel - l.quantidadePendente, 0);
+}
+
+/** Venda diária do SKU no CD (venda média mensal ÷ 30). */
+export function vendaDia(l: LinhaBase): number {
+  return l.vendaMedia3m > 0 ? l.vendaMedia3m / 30 : 0;
+}
+
+/**
+ * REGRA 3b — teto/piso de cobertura do destino, em unidades.
+ * Converte "dias de cobertura" no volume que ainda cabe no CD:
+ *   limite = venda_dia × dias − (disponível + pendente + trânsito)
+ * Devolve `null` quando a regra está desligada (dias = 0) ou quando o SKU não
+ * tem giro no destino (aí dias de cobertura não significam nada).
+ */
+export function limitePorCobertura(l: LinhaBase, dias: number, transito = 0): number | null {
+  if (dias <= 0) return null;
+  const vd = vendaDia(l);
+  if (vd <= 0) return null;
+  return Math.max(vd * dias - (l.estoqueDisponivel + l.quantidadePendente + transito), 0);
+}
+
+/** REGRA 7 — cobertura em dias do SKU no CD (usada na visão da origem). */
+export function cobertura(l: LinhaBase, limiteDias: number): { dias: number; status: string } {
+  const estoque = l.estoqueDisponivel + l.quantidadePendente;
+  if (l.vendaMedia3m <= 0) {
     if (estoque > 0) return { dias: 9999, status: "Sem giro" };
     return { dias: 0, status: `Ate ${limiteDias} dias` };
   }
-  const dias = (estoque * 30) / sku.vendaMedia3m;
-  return { dias, status: dias > limiteDias ? `Acima de ${limiteDias} dias` : `Ate ${limiteDias} dias` };
+  const dias = (estoque * 30) / l.vendaMedia3m;
+  return {
+    dias,
+    status: dias > limiteDias ? `Acima de ${limiteDias} dias` : `Ate ${limiteDias} dias`,
+  };
+}
+
+/** Regras de materialidade e caixa fechada aplicadas a cada alocação. */
+export interface RegrasLote {
+  embCompra: number;
+  preco: number;
+  caixaFechada: boolean;
+  minUnidades: number;
+  minValor: number;
 }
 
 /**
- * Cascata por prioridade implementada de forma VETORIZADA por soma acumulada
- * (REGRA 4 / requisito não-funcional). Para os N baldes (mês × CD, em ordem
- * cronológica e de prioridade) com pedidos p[i]:
- *
- *   cumBefore[i] = soma(p[0..i-1])
- *   transf[i]    = CLAMP(excesso - cumBefore[i], 0, p[i])
- *
- * É algebricamente idêntico ao laço `saldo -= min(pedido, saldo)`, mas sem
- * dependência sequencial artificial — permite paralelização por SKU.
- *
- * @param pedidos vetor de pedidos na ordem dos baldes
- * @param excesso excesso transferível do SKU
- * @returns vetor de transferências por balde
+ * Ajusta uma quantidade alocada às regras de embarque: caixa fechada (arredonda
+ * para baixo, nunca inventa unidade) e materialidade mínima. O que não passa
+ * volta a zero — e, como a cascata é sequencial, o saldo continua disponível
+ * para o próximo balde.
  */
-export function cascataCumsum(pedidos: number[], excesso: number): number[] {
-  const n = pedidos.length;
-  const transf = new Array<number>(n);
-  let cumBefore = 0;
+export function ajustarLote(qtd: number, r: RegrasLote): number {
+  let q = qtd;
+  if (q <= EPS) return 0;
+  if (r.caixaFechada && r.embCompra > 0) q = roundDown(q / r.embCompra) * r.embCompra;
+  if (q <= EPS) return 0;
+  if (r.minUnidades > 0 && q < r.minUnidades) return 0;
+  if (r.minValor > 0 && q * r.preco < r.minValor) return 0;
+  return q;
+}
+
+/**
+ * REGRA 4 — cascata gulosa por prioridade.
+ * Para os N baldes de demanda na ordem escolhida:
+ *   transf[i] = ajustarLote(MIN(demanda[i], saldo))
+ * Sem regras de lote é exatamente `CLAMP(excesso − cumsum_anterior, 0, p[i])`.
+ */
+export function cascata(demanda: number[], excesso: number, regras?: RegrasLote): number[] {
+  const n = demanda.length;
+  const transf = new Array<number>(n).fill(0);
+  let saldo = excesso;
   for (let i = 0; i < n; i++) {
-    transf[i] = clamp(excesso - cumBefore, 0, pedidos[i]);
-    cumBefore += pedidos[i];
+    if (saldo <= EPS) break;
+    const bruto = Math.min(demanda[i], saldo);
+    const q = regras ? ajustarLote(bruto, regras) : bruto;
+    if (q > 0) {
+      transf[i] = q;
+      saldo -= q;
+    }
   }
   return transf;
 }
 
+/** Mantido como referência da formulação vetorizada (cumsum-clamp). */
+export function cascataCumsum(demanda: number[], excesso: number): number[] {
+  return cascata(demanda, excesso);
+}
+
+/**
+ * Distribui o excesso entre destinos NIVELANDO os dias de cobertura
+ * (water-filling): enche primeiro quem está mais descoberto, até igualar ao
+ * próximo, e assim por diante. Evita que o último da fila fique em ruptura
+ * quando o excesso é escasso.
+ *
+ * @param necessidade limite de cada destino (unidades) — índice = ordem do destino
+ * @param estoqueDia  estoque projetado de cada destino, em unidades
+ * @param vd          venda diária de cada destino (0 = sem giro)
+ * @param excesso     unidades a distribuir
+ * @returns unidades por destino (mesma indexação)
+ */
+export function nivelarPorCobertura(
+  necessidade: number[],
+  estoqueDia: number[],
+  vd: number[],
+  excesso: number,
+): number[] {
+  const n = necessidade.length;
+  const saida = new Array<number>(n).fill(0);
+  let restante = excesso;
+
+  // Só entram no nivelamento destinos com demanda e com giro.
+  const ativos: number[] = [];
+  for (let d = 0; d < n; d++) if (necessidade[d] > EPS && vd[d] > EPS) ativos.push(d);
+
+  let guarda = 0;
+  while (restante > EPS && ativos.length > 0 && guarda++ < 4 * n + 8) {
+    // Cobertura atual (em dias) de cada ativo, já com o que foi alocado.
+    let nivel = Infinity;
+    for (const d of ativos) {
+      const cob = (estoqueDia[d] + saida[d]) / vd[d];
+      if (cob < nivel) nivel = cob;
+    }
+    // Grupo no nível mais baixo e o próximo degrau a alcançar.
+    const grupo: number[] = [];
+    let proximo = Infinity;
+    for (const d of ativos) {
+      const cob = (estoqueDia[d] + saida[d]) / vd[d];
+      if (cob <= nivel + 1e-6) grupo.push(d);
+      else if (cob < proximo) proximo = cob;
+    }
+    let somaVenda = 0;
+    for (const d of grupo) somaVenda += vd[d];
+    if (somaVenda <= EPS) break;
+
+    // Quanto podemos subir: até o próximo degrau, até acabar o excesso, ou até
+    // o primeiro destino do grupo bater a própria necessidade.
+    let deltaDias = Math.min(
+      proximo === Infinity ? Infinity : proximo - nivel,
+      restante / somaVenda,
+    );
+    for (const d of grupo) {
+      const cabe = (necessidade[d] - saida[d]) / vd[d];
+      if (cabe < deltaDias) deltaDias = cabe;
+    }
+    if (!(deltaDias > EPS)) {
+      // Ninguém pode subir: remove os saturados e tenta de novo.
+      for (let i = ativos.length - 1; i >= 0; i--) {
+        if (necessidade[ativos[i]] - saida[ativos[i]] <= EPS) ativos.splice(i, 1);
+      }
+      if (grupo.every((d) => necessidade[d] - saida[d] <= EPS)) continue;
+      break;
+    }
+    for (const d of grupo) {
+      const q = Math.min(deltaDias * vd[d], necessidade[d] - saida[d], restante);
+      saida[d] += q;
+      restante -= q;
+    }
+    for (let i = ativos.length - 1; i >= 0; i--) {
+      if (necessidade[ativos[i]] - saida[ativos[i]] <= EPS) ativos.splice(i, 1);
+    }
+  }
+
+  // Sobra: destinos sem giro (ou remanescentes) atendidos na ordem de prioridade.
+  if (restante > EPS) {
+    for (let d = 0; d < n && restante > EPS; d++) {
+      const cabe = necessidade[d] - saida[d];
+      if (cabe <= EPS) continue;
+      const q = Math.min(cabe, restante);
+      saida[d] += q;
+      restante -= q;
+    }
+  }
+  return saida;
+}
+
+
+// ---------------------------------------------------------------------------
+// CAPACIDADE OPERACIONAL — o risco de sugerir mais do que a rede consegue mover
+// ---------------------------------------------------------------------------
+
+/**
+ * Quanto UMA unidade transferida consome da métrica de capacidade.
+ * Devolve 0 quando o SKU não tem o dado (aí ele não consome capacidade e é
+ * contado em `skusSemFatorCapacidade`).
+ */
+export function fatorCapacidade(l: LinhaBase, metrica: MetricaCapacidade, preco: number): number {
+  switch (metrica) {
+    case "unidades":
+      return 1;
+    case "caixas":
+      return l.embCompra > 0 ? 1 / l.embCompra : 0;
+    case "paletes":
+      return l.unidadesPorPalete && l.unidadesPorPalete > 0 ? 1 / l.unidadesPorPalete : 0;
+    case "peso":
+      return l.pesoUnitario && l.pesoUnitario > 0 ? l.pesoUnitario : 0;
+    case "volume":
+      return l.cubagemUnitaria && l.cubagemUnitaria > 0 ? l.cubagemUnitaria : 0;
+    case "valor":
+      return preco > 0 ? preco : 0;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Orçamento de capacidade da rede: expedição por origem, recebimento por
+ * destino e transporte por rota. Cada alocação consome os três ao mesmo tempo
+ * — o menor deles é o gargalo.
+ *
+ * O saldo é sempre consultado em UNIDADES do produto (converte pela métrica),
+ * porque é assim que o motor aloca.
+ */
+export class OrcamentoCapacidade {
+  readonly ativo: boolean;
+  readonly metrica: MetricaCapacidade;
+  private readonly limOrigem: number[];
+  private readonly limDestino: number[];
+  private readonly limRota: number[][];
+  private readonly usoOrigem: number[];
+  private readonly usoDestino: number[];
+  private readonly usoRota: number[][];
+  readonly compOrigem: number[];
+  readonly compDestino: number[];
+  readonly compRota: number[][];
+  readonly bloqOrigem: number[];
+  readonly bloqDestino: number[];
+  readonly bloqRota: number[][];
+
+  constructor(cap: CapacidadeRede, origens: number[], destinos: number[]) {
+    this.metrica = cap.metrica ?? "unidades";
+    const semLimite = Number.POSITIVE_INFINITY;
+    const lim = (v: number | undefined) => (v && v > 0 ? v : semLimite);
+    this.limOrigem = origens.map((cd) => lim(cap.porOrigem?.[cd]));
+    this.limDestino = destinos.map((cd) => lim(cap.porDestino?.[cd]));
+    this.limRota = origens.map((o) => destinos.map((d) => lim(cap.porRota?.[chaveRota(o, d)])));
+    this.ativo =
+      this.limOrigem.some(Number.isFinite) ||
+      this.limDestino.some(Number.isFinite) ||
+      this.limRota.some((linha) => linha.some(Number.isFinite));
+    this.usoOrigem = origens.map(() => 0);
+    this.usoDestino = destinos.map(() => 0);
+    this.usoRota = origens.map(() => destinos.map(() => 0));
+    this.compOrigem = origens.map(() => 0);
+    this.compDestino = destinos.map(() => 0);
+    this.compRota = origens.map(() => destinos.map(() => 0));
+    this.bloqOrigem = origens.map(() => 0);
+    this.bloqDestino = destinos.map(() => 0);
+    this.bloqRota = origens.map(() => destinos.map(() => 0));
+  }
+
+  /** Saldo em unidades do produto para a rota (o, d), dado o fator do SKU. */
+  disponivelUnidades(o: number, d: number, fator: number): number {
+    if (!this.ativo || fator <= 0) return Number.POSITIVE_INFINITY;
+    const saldo = Math.min(
+      this.limOrigem[o] - this.usoOrigem[o],
+      this.limDestino[d] - this.usoDestino[d],
+      this.limRota[o][d] - this.usoRota[o][d],
+    );
+    if (!Number.isFinite(saldo)) return Number.POSITIVE_INFINITY;
+    return Math.max(saldo, 0) / fator;
+  }
+
+  /** Debita a capacidade consumida por `unidades` do SKU. */
+  consumir(o: number, d: number, unidades: number, fator: number): void {
+    if (!this.ativo || fator <= 0 || unidades <= 0) return;
+    const custo = unidades * fator;
+    this.usoOrigem[o] += custo;
+    this.usoDestino[d] += custo;
+    this.usoRota[o][d] += custo;
+  }
+
+  /** Debita o que já está aprovado e ainda não faturado (ocupa doca e frota). */
+  comprometer(o: number, d: number, unidades: number, fator: number): void {
+    if (!this.ativo || fator <= 0 || unidades <= 0) return;
+    const custo = unidades * fator;
+    this.compOrigem[o] += custo;
+    this.compDestino[d] += custo;
+    this.compRota[o][d] += custo;
+    this.consumir(o, d, unidades, fator);
+  }
+
+  /** Registra as unidades barradas e por qual gargalo. */
+  registrarBloqueio(o: number, d: number, unidades: number, fator: number): void {
+    if (unidades <= 0) return;
+    const folgaO = this.limOrigem[o] - this.usoOrigem[o];
+    const folgaD = this.limDestino[d] - this.usoDestino[d];
+    const folgaR = this.limRota[o][d] - this.usoRota[o][d];
+    const menor = Math.min(folgaO, folgaD, folgaR);
+    if (!Number.isFinite(menor)) return;
+    if (menor === folgaD) this.bloqDestino[d] += unidades;
+    else if (menor === folgaO) this.bloqOrigem[o] += unidades;
+    else this.bloqRota[o][d] += unidades;
+    void fator;
+  }
+
+  limite(tipo: "origem" | "destino", i: number): number {
+    const v = tipo === "origem" ? this.limOrigem[i] : this.limDestino[i];
+    return Number.isFinite(v) ? v : 0;
+  }
+  limiteRota(o: number, d: number): number {
+    const v = this.limRota[o][d];
+    return Number.isFinite(v) ? v : 0;
+  }
+  uso(tipo: "origem" | "destino", i: number): number {
+    return tipo === "origem" ? this.usoOrigem[i] : this.usoDestino[i];
+  }
+  usoRotaDe(o: number, d: number): number {
+    return this.usoRota[o][d];
+  }
+}
+
+/** Constrói o índice de pedidos (join O(1) por chave). */
+export function indexarPedidos(
+  pedidos: { anoMes: string; cdDestino: number; codigoProduto: number; pedido: number }[],
+): PedidosIndex {
+  const idx: PedidosIndex = new Map();
+  for (const p of pedidos) {
+    const k = chavePedido(p.anoMes, p.cdDestino, p.codigoProduto);
+    idx.set(k, (idx.get(k) ?? 0) + p.pedido);
+  }
+  return idx;
+}
+
+/** Remove duplicatas preservando a ordem escolhida pelo usuário. */
+function unicos(cds: number[]): number[] {
+  const vistos = new Set<number>();
+  const out: number[] = [];
+  for (const cd of cds) {
+    const n = Number(cd);
+    if (!vistos.has(n)) {
+      vistos.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/**
+ * Aplica as CHAVES GERAIS às regras opcionais. Desligar um grupo não apaga os
+ * valores — eles continuam no parâmetro, prontos para religar.
+ */
+export function regrasEfetivas(p: ParametrosRede): {
+  coberturaMax: number;
+  coberturaMin: number;
+  caixaFechada: boolean;
+  minUnidades: number;
+  minValor: number;
+  minValorRota: number;
+  capacidade: CapacidadeRede;
+} {
+  const cobOk = p.limitesCoberturaAtivos !== false;
+  const embOk = p.limitesEmbarqueAtivos !== false;
+  const cap = p.capacidade ?? capacidadeVazia();
+  const capOk = cap.ativa !== false;
+  return {
+    coberturaMax: cobOk ? p.coberturaMaxDestinoDias ?? 0 : 0,
+    coberturaMin: cobOk ? p.coberturaMinDestinoDias ?? 0 : 0,
+    caixaFechada: embOk && p.arredondarCaixaFechada === true,
+    minUnidades: embOk ? p.minUnidadesLinha ?? 0 : 0,
+    minValor: embOk ? p.minValorLinha ?? 0 : 0,
+    minValorRota: embOk ? p.minValorRota ?? 0 : 0,
+    capacidade: capOk ? cap : { ...cap, porOrigem: {}, porDestino: {}, porRota: {} },
+  };
+}
+
 export interface OpcoesCalculo {
-  /** Reconciliação por SKU: soma(transf)+sobra == excesso. Default true. */
+  /** Valida os invariantes de rede (origem e destino). Default true. */
   validarInvariante?: boolean;
-  /** callback de progresso (0..1) a cada `progressoIntervalo` SKUs. */
   onProgresso?: (pct: number) => void;
   progressoIntervalo?: number;
 }
 
 /**
- * Motor de cálculo completo. Puro, sem estado, testável.
+ * MOTOR DE REDE — multi-origem × multi-destino.
  *
- * Suporta os DOIS modelos de transferência (modelo híbrido), escolhidos por
- * `params.modelo`:
+ * Sequência da análise (é o que o usuário configura na tela):
+ *   para cada ORIGEM na ordem escolhida
+ *     reparte o excesso entre os destinos — por prioridade estrita (mês →
+ *     destino, no modo pedidos) ou nivelando dias de cobertura
  *
- * - "drp" (modelo 1): distribui o excesso do CD de origem pelos PEDIDOS
- *   PROJETADOS, cascateando por (mês × CD) na ordem cronológica e de
- *   prioridade. Fonte da demanda: `pedidosIndex`.
+ * A demanda é um saldo COMPARTILHADO: o que a origem 1 atende some da fila da
+ * origem 2. Por isso a ordem das origens muda o resultado.
  *
- * - "estoque_objetivo" (modelo 2): distribui o mesmo excesso para atender o
- *   SALDO DE ESTOQUE OBJETIVO de cada CD destino, SEM quebra mensal — um único
- *   balde por CD, na ordem de prioridade. Fonte da demanda: `objetivoIndex`.
- *   Neste modelo os vetores por mês saem ZERADOS e a coluna
- *   "Transferir para atender estoque objetivo" carrega a transferência.
- *
- * Em ambos os modelos a cascata gulosa `cascataCumsum` é a mesma — muda apenas
- * de onde vêm os baldes de demanda.
+ * Um CD nunca transfere para si mesmo (o balde da própria origem é zerado).
  */
-export function calcular(
-  posicao: PosicaoEstoque[],
+export function calcularRede(
+  base: LinhaBase[],
   pedidosIndex: PedidosIndex,
-  params: Parametros,
+  params: ParametrosRede,
+  compromissos: Compromissos = compromissosVazios(),
   opts: OpcoesCalculo = {},
-  objetivoIndex: ObjetivoIndex = new Map(),
-): ResultadoCalculo {
+): ResultadoRede {
   const t0 = Date.now();
-  const modelo = params.modelo ?? "drp";
-  const objetivoMode = modelo === "estoque_objetivo";
-  const meses = params.horizonteMeses;
-  // Destinos = prioridade, sempre excluindo o CD de origem (não transfere para si).
-  const cds = params.prioridadeCds.filter((cd) => cd !== params.cdOrigem);
+  const modo = params.modoDemanda;
+  const usaPedidos = modo === "pedidos";
+  const origens = unicos(params.origens);
+  const destinos = unicos(params.destinos);
+  const meses = usaPedidos ? params.horizonteMeses : [];
   const nMes = meses.length;
-  const nCd = cds.length;
-  const nBaldes = objetivoMode ? nCd : nMes * nCd;
+  const nOri = origens.length;
+  const nDst = destinos.length;
   const fs = params.fatorSegurancaImediata;
   const validar = opts.validarInvariante ?? true;
   const progInt = opts.progressoIntervalo ?? 5000;
+  const usarAprovadas = params.considerarAprovadas !== false;
+  const comPendente = params.considerarPendenteOrigem !== false;
+  const nivelar = params.estrategiaDestino === "nivelar_cobertura";
+  const regras = regrasEfetivas(params);
+  const diasMax = regras.coberturaMax;
+  const diasMin = regras.coberturaMin;
+  const caixaFechada = regras.caixaFechada;
+  const minUn = regras.minUnidades;
+  const minVal = regras.minValor;
+  const minValRota = regras.minValorRota;
+  const cap = regras.capacidade;
+
+  const posOrigem = new Map<number, number>();
+  origens.forEach((cd, i) => posOrigem.set(cd, i));
+  const posDestino = new Map<number, number>();
+  destinos.forEach((cd, i) => posDestino.set(cd, i));
+
+  // Orçamento operacional: expedição × recebimento × transporte.
+  const orc = new OrcamentoCapacidade(cap, origens, destinos);
+  const skusSemFator = new Set<number>();
+  let qtdBloqueadaPorCapacidade = 0;
+  let valorBloqueadoPorCapacidade = 0;
+
+  // --- Agrupamento por produto (um passe pela base) --------------------------
+  const porProduto = new Map<number, LinhaBase[]>();
+  for (const l of base) {
+    if (!posOrigem.has(l.cd) && !posDestino.has(l.cd)) continue;
+    const arr = porProduto.get(l.codigoProduto);
+    if (arr) arr.push(l);
+    else porProduto.set(l.codigoProduto, [l]);
+  }
+
+  /**
+   * Com capacidade escassa, a ORDEM em que os SKUs consomem o orçamento passa a
+   * importar: quem chega primeiro ocupa a doca. Sem limite ativo, mantém a
+   * ordem natural da base (resultado idêntico ao de antes).
+   */
+  const ordemProdutos = Array.from(porProduto.keys());
+  if (orc.ativo) {
+    const score = new Map<number, number>();
+    for (const [prod, ls] of porProduto) {
+      let v: number;
+      if (cap.prioridade === "urgencia") {
+        // Menor cobertura entre os destinos = mais urgente.
+        let pior = Infinity;
+        for (const l of ls) {
+          if (!posDestino.has(l.cd)) continue;
+          const vd = vendaDia(l);
+          const cob = vd > 0 ? (l.estoqueDisponivel + l.quantidadePendente) / vd : Infinity;
+          if (cob < pior) pior = cob;
+        }
+        v = pior === Infinity ? Number.NEGATIVE_INFINITY : -pior;
+      } else {
+        v = 0;
+        for (const l of ls) {
+          if (!posOrigem.has(l.cd)) continue;
+          v += excessoTransferivel(l, comPendente) * precoUnitario(l);
+        }
+      }
+      score.set(prod, v);
+    }
+    ordemProdutos.sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0));
+  }
+
+  // O que já foi aprovado e não faturado ocupa doca, frota e área de expedição.
+  if (orc.ativo && usarAprovadas && compromissos.rotaProduto.size > 0) {
+    for (const [chave, qtd] of compromissos.rotaProduto) {
+      if (qtd <= 0) continue;
+      const sep = chave.indexOf("|");
+      const rota = chave.slice(0, sep);
+      const prod = Number(chave.slice(sep + 1));
+      const seta = rota.indexOf(">");
+      const cdO = Number(rota.slice(0, seta));
+      const cdD = Number(rota.slice(seta + 1));
+      const io = posOrigem.get(cdO);
+      const id = posDestino.get(cdD);
+      if (io === undefined || id === undefined) continue;
+      const ls = porProduto.get(prod);
+      if (!ls) continue;
+      const lo = ls.find((l) => l.cd === cdO);
+      if (!lo) continue;
+      orc.comprometer(io, id, qtd, fatorCapacidade(lo, orc.metrica, precoUnitario(lo)));
+    }
+  }
 
   const linhas: LinhaPlano[] = [];
 
-  // Acumuladores do resumo por CD.
-  const resumoMap = new Map<number, ResumoCd>();
-  for (const cd of cds) {
-    resumoMap.set(cd, {
-      cdDestino: cd,
-      aliquotaFiscal: params.aliquotaFiscal[cd] ?? 0,
-      aliquotaDefinida: params.aliquotaFiscal[cd] !== undefined,
-      transfMes: new Array(nMes).fill(0),
-      valorTransfMes: new Array(nMes).fill(0),
-      transfObjetivo: 0,
-      valorTransfObjetivo: 0,
-      qtdImediata: 0,
-      valorImediata: 0,
-      impactoFiscal: 0,
-    });
-  }
+  const resumoOrigem: ResumoOrigem[] = origens.map((cd, i) => ({
+    cd,
+    ordem: i + 1,
+    excessoQtd: 0,
+    excessoRs: 0,
+    transferidoQtd: 0,
+    transferidoRs: 0,
+    sobraQtd: 0,
+    sobraRs: 0,
+    skusComExcesso: 0,
+    capacidadeLimite: 0,
+    capacidadeComprometida: 0,
+    capacidadeUsada: 0,
+    bloqueadoPorCapacidade: 0,
+  }));
+  const resumoDestino: ResumoDestino[] = destinos.map((cd, i) => ({
+    cd,
+    ordem: i + 1,
+    necessidadeBrutaQtd: 0,
+    necessidadeQtd: 0,
+    necessidadeRs: 0,
+    atendidoQtd: 0,
+    atendidoRs: 0,
+    aberto: 0,
+    cobertura: 0,
+    capacidadeLimite: 0,
+    capacidadeComprometida: 0,
+    capacidadeUsada: 0,
+    bloqueadoPorCapacidade: 0,
+  }));
 
-  let excessoTotalRs = 0;
-  let excessoSimplesRs = 0;
-  let skusComExcesso = 0;
+  let necessidadeTotalRs = 0;
+  let paresOrigemProduto = 0;
   let invarianteOk = true;
   let maiorDivergencia = 0;
-  const valorTransfMesTotal = new Array(nMes).fill(0);
-  let valorTransfObjetivoTotal = 0;
-  let valorImediataTotal = 0;
+  let autoTransferencias = 0;
 
-  // Buffer de demanda por balde. No modelo objetivo há 1 balde por CD; no
-  // modelo DRP há 1 balde por (mês × CD).
-  const demandaBuf = new Array<number>(nBaldes);
+  // Buffers reaproveitados entre produtos (evita alocação por SKU).
+  const mesBuf = new Array<number>(Math.max(nMes * nDst, 1)).fill(0); // modo pedidos
+  const totBuf = new Array<number>(nDst).fill(0); // necessidade total por destino
+  const linhaOrigem = new Array<LinhaBase | undefined>(nOri);
+  const linhaDestino = new Array<LinhaBase | undefined>(nDst);
+  const precoRef = new Array<number>(nOri);
+  const alvoDst = new Array<number>(nDst).fill(0); // alocação por destino (nivelamento)
+  const estoqueDst = new Array<number>(nDst).fill(0);
+  const vdDst = new Array<number>(nDst).fill(0);
+  const transfDst = new Array<number>(nDst).fill(0);
+  const perdaDst = new Array<number>(nDst).fill(0);
+  const demandaVistaDst = new Array<number>(nDst).fill(0);
+  const transfDstMes: number[][] = Array.from({ length: nDst }, () => new Array<number>(nMes).fill(0));
+  const demandaDstMes: number[][] = Array.from({ length: nDst }, () => new Array<number>(nMes).fill(0));
 
-  for (let s = 0; s < posicao.length; s++) {
-    const sku = posicao[s];
-    const preco = precoUnitario(sku);
-    const excesso = excessoTransferivel(sku);
-    excessoTotalRs += excesso * preco;
-    excessoSimplesRs += Math.max(sku.estoqueDisponivel - sku.estoqueObjetivo, 0) * preco;
-    if (excesso <= 0) {
-      if (opts.onProgresso && s % progInt === 0) opts.onProgresso(s / posicao.length);
-      continue;
+  let processados = 0;
+  const totalProdutos = porProduto.size;
+
+  for (const codigoProduto of ordemProdutos) {
+    const linhasProduto = porProduto.get(codigoProduto)!;
+    processados++;
+    if (opts.onProgresso && processados % progInt === 0) opts.onProgresso(processados / totalProdutos);
+
+    linhaOrigem.fill(undefined);
+    linhaDestino.fill(undefined);
+    for (const l of linhasProduto) {
+      const io = posOrigem.get(l.cd);
+      if (io !== undefined) linhaOrigem[io] = l;
+      const id = posDestino.get(l.cd);
+      if (id !== undefined) linhaDestino[id] = l;
     }
-    skusComExcesso++;
 
-    // Demanda por balde (ordem de prioridade — e cronológica no modelo DRP).
-    if (objetivoMode) {
-      // MODELO 2 — 1 balde por CD: saldo de estoque objetivo daquele CD.
-      for (let c = 0; c < nCd; c++) {
-        demandaBuf[c] = objetivoIndex.get(chaveObjetivo(cds[c], sku.codigoProduto)) ?? 0;
-      }
-    } else {
-      // MODELO DRP (REGRA 3) — 1 balde por (mês × CD): pedido projetado.
-      let b = 0;
-      for (let m = 0; m < nMes; m++) {
-        for (let c = 0; c < nCd; c++) {
-          demandaBuf[b++] = pedidosIndex.get(chavePedido(meses[m], cds[c], sku.codigoProduto)) ?? 0;
+    // Preço de referência do produto (valoriza a necessidade do destino).
+    let precoProduto = 0;
+    for (let i = 0; i < nOri; i++) {
+      const lo = linhaOrigem[i];
+      const p = lo ? precoUnitario(lo) : 0;
+      precoRef[i] = p;
+      if (precoProduto === 0 && p > 0) precoProduto = p;
+    }
+    if (precoProduto === 0) {
+      for (let d = 0; d < nDst; d++) {
+        const ld = linhaDestino[d];
+        if (ld) {
+          const p = precoUnitario(ld);
+          if (p > 0) {
+            precoProduto = p;
+            break;
+          }
         }
       }
     }
 
-    // REGRA 4 — cascata vetorizada (idêntica nos dois modelos).
-    const transf = cascataCumsum(demandaBuf, excesso);
+    // ----------------------- Demanda de cada destino -----------------------
+    let demandaTotalProduto = 0;
+    for (let d = 0; d < nDst; d++) {
+      const ld = linhaDestino[d];
+      const transito = usarAprovadas
+        ? compromissos.entradaDestino.get(chaveCdProduto(destinos[d], codigoProduto)) ?? 0
+        : 0;
 
-    // REGRA 5/6/7 — valores, imediata, caixas, cobertura por CD.
-    const dispHoje = Math.max(sku.estoqueDisponivel - sku.vendaMedia3m * fs, 0);
-    const cov = cobertura(sku, params.limiteCoberturaDias);
-
-    // Reconciliação por SKU (invariante do modelo).
-    if (validar) {
-      let soma = 0;
-      for (let i = 0; i < nBaldes; i++) soma += transf[i];
-      const sobraFinal = excesso - soma;
-      const diverg = Math.abs(soma + sobraFinal - excesso);
-      if (diverg > 1e-6) {
-        invarianteOk = false;
-        if (diverg > maiorDivergencia) maiorDivergencia = diverg;
-      }
-      // sobra não pode ser negativa (transf nunca excede excesso)
-      if (sobraFinal < -1e-6) {
-        invarianteOk = false;
-        maiorDivergencia = Math.max(maiorDivergencia, -sobraFinal);
-      }
-    }
-
-    // Monta uma linha por CD com transferência > 0.
-    for (let c = 0; c < nCd; c++) {
-      const cd = cds[c];
-      const transfMes = new Array(nMes).fill(0);
-      const pedidoMes = new Array(nMes).fill(0);
-      const valorTransfMes = new Array(nMes).fill(0);
-      const transfCaixasMes = new Array(nMes).fill(0);
-      let transfObjetivo = 0;
-      let valorTransfObjetivo = 0;
-      let transfObjetivoCaixas = 0;
-      let transfTotalCd = 0;
-      let valorHorizonte = 0;
-      let baseImediata = 0; // quantidade candidata à transferência imediata
-
-      if (objetivoMode) {
-        // MODELO 2 — transferência única para atender o estoque objetivo.
-        const t = transf[c];
-        transfObjetivo = t;
-        valorTransfObjetivo = t * preco;
-        transfObjetivoCaixas = sku.embCompra > 0 ? round(t / sku.embCompra) : 0;
-        transfTotalCd = t;
-        valorHorizonte = valorTransfObjetivo;
-        valorTransfObjetivoTotal += valorTransfObjetivo;
-        baseImediata = t; // atender o objetivo é, por natureza, imediato
-      } else {
-        // MODELO DRP — transferência mês a mês.
+      // Demanda bruta (antes de teto/piso).
+      let bruta = 0;
+      if (usaPedidos) {
         for (let m = 0; m < nMes; m++) {
-          const idx = m * nCd + c;
-          const t = transf[idx];
-          transfMes[m] = t;
-          pedidoMes[m] = demandaBuf[idx];
-          const v = t * preco;
-          valorTransfMes[m] = v;
-          transfCaixasMes[m] = sku.embCompra > 0 ? round(t / sku.embCompra) : 0;
-          transfTotalCd += t;
-          valorHorizonte += v;
-          valorTransfMesTotal[m] += v;
+          const ped = pedidosIndex.get(chavePedido(meses[m], destinos[d], codigoProduto)) ?? 0;
+          mesBuf[m * nDst + d] = ped;
+          bruta += ped;
         }
-        baseImediata = transfMes[0] ?? 0; // mês 1 deste CD
+      } else {
+        bruta = ld ? necessidadeSaldoIdeal(ld) : 0;
       }
-      if (transfTotalCd <= 0) continue; // REGRA 9 — materialidade
+      resumoDestino[d].necessidadeBrutaQtd += bruta;
 
-      // REGRA 5/6 — transferência imediata.
-      const qtdImediata = Math.min(baseImediata, dispHoje);
-      // Transferência imediata em CAIXAS (cx): arredonda SEMPRE PARA BAIXO
-      // (caixa fechada). Se a quantidade imediata não fecha 1 caixa
-      // (qtdImediata < embCompra), a transferência imediata em cx é ZERO —
-      // ROUNDDOWN(qtd/emb) já entrega 0 nesse caso.
-      let imediataCaixas = 0;
-      let qtdImediataArred = 0;
-      if (sku.embCompra > 0 && qtdImediata > 0) {
-        imediataCaixas = roundDown(qtdImediata / sku.embCompra);
-        if (imediataCaixas < 0) imediataCaixas = 0;
-        qtdImediataArred = imediataCaixas * sku.embCompra;
+      // Trânsito aprovado abate primeiro (meses mais próximos no modo pedidos).
+      let liquida = bruta;
+      if (transito > 0) {
+        if (usaPedidos) {
+          let resto = transito;
+          for (let m = 0; m < nMes && resto > 0; m++) {
+            const b = m * nDst + d;
+            const abate = Math.min(resto, mesBuf[b]);
+            mesBuf[b] -= abate;
+            resto -= abate;
+          }
+          liquida = Math.max(bruta - transito, 0);
+        } else {
+          liquida = Math.max(bruta - transito, 0);
+        }
       }
-      // Valor da transferência imediata = valor das UNIDADES efetivamente
-      // transferidas em caixas fechadas (qtdImediataArred), e não da
-      // quantidade teórica não arredondada.
-      const valorImediata = qtdImediataArred * preco;
 
-      const r = resumoMap.get(cd)!;
-      for (let m = 0; m < nMes; m++) {
-        r.transfMes[m] += transfMes[m];
-        r.valorTransfMes[m] += valorTransfMes[m];
+      // Piso e teto de cobertura (só fazem sentido com giro e cadastro no CD).
+      if (ld) {
+        const piso = limitePorCobertura(ld, diasMin, transito);
+        if (piso !== null && piso > liquida) {
+          const falta = piso - liquida;
+          if (usaPedidos) mesBuf[0 * nDst + d] += falta; // antirruptura entra já no 1º mês
+          liquida = piso;
+        }
+        const teto = limitePorCobertura(ld, diasMax, transito);
+        if (teto !== null && liquida > teto) {
+          if (usaPedidos) {
+            // Corta do mês mais distante para o mais próximo.
+            let excedente = liquida - teto;
+            for (let m = nMes - 1; m >= 0 && excedente > 0; m--) {
+              const b = m * nDst + d;
+              const corte = Math.min(excedente, mesBuf[b]);
+              mesBuf[b] -= corte;
+              excedente -= corte;
+            }
+          }
+          liquida = teto;
+        }
       }
-      r.transfObjetivo += transfObjetivo;
-      r.valorTransfObjetivo += valorTransfObjetivo;
-      r.qtdImediata += qtdImediata;
-      r.valorImediata += valorImediata;
-      r.impactoFiscal += valorHorizonte * r.aliquotaFiscal;
-      valorImediataTotal += valorImediata;
 
-      linhas.push({
-        cdDestino: cd,
-        idSku: sku.idSku,
-        deposito: sku.deposito,
-        codigoProduto: sku.codigoProduto,
-        produto: sku.produto,
-        fornecedor: sku.fornecedor,
-        comprador: sku.comprador,
-        analista: sku.analista,
-        categoriaN1: sku.categoriaN1,
-        categoriaN2: sku.categoriaN2,
-        categoriaN3: sku.categoriaN3,
-        categoriaN4: sku.categoriaN4,
-        precoUnitario: preco,
-        embCompra: sku.embCompra,
-        pedidoMes,
-        transfMes,
-        valorTransfMes,
-        transfCaixasMes,
-        transfObjetivo,
-        valorTransfObjetivo,
-        transfObjetivoCaixas,
-        qtdTransfImediata: qtdImediata,
-        valorTransfImediata: valorImediata,
-        imediataCaixas,
-        qtdImediataArredondada: qtdImediataArred,
-        coberturaDias: cov.dias,
-        statusCobertura: cov.status,
-        transfTotal: transfTotalCd,
-      });
+      totBuf[d] = liquida;
+      estoqueDst[d] = ld ? ld.estoqueDisponivel + ld.quantidadePendente + transito : 0;
+      vdDst[d] = ld ? vendaDia(ld) : 0;
+      resumoDestino[d].necessidadeQtd += liquida;
+      resumoDestino[d].necessidadeRs += liquida * precoProduto;
+      demandaTotalProduto += liquida;
+    }
+    necessidadeTotalRs += demandaTotalProduto * precoProduto;
+
+    // ------------------------- Excesso de cada origem ----------------------
+    let temExcesso = false;
+    for (let i = 0; i < nOri; i++) {
+      const lo = linhaOrigem[i];
+      if (!lo) continue;
+      let exc = excessoTransferivel(lo, comPendente);
+      if (usarAprovadas && exc > 0) {
+        exc = Math.max(exc - (compromissos.saidaOrigem.get(chaveCdProduto(origens[i], codigoProduto)) ?? 0), 0);
+      }
+      if (exc <= 0) continue;
+      temExcesso = true;
+      paresOrigemProduto++;
+      const ro = resumoOrigem[i];
+      ro.excessoQtd += exc;
+      ro.excessoRs += exc * precoRef[i];
+      ro.skusComExcesso++;
     }
 
-    if (opts.onProgresso && s % progInt === 0) opts.onProgresso(s / posicao.length);
+    if (!temExcesso || demandaTotalProduto <= 0) continue;
+
+    // ------------- Alocação: origem por origem, na ordem escolhida ---------
+    for (let i = 0; i < nOri; i++) {
+      const lo = linhaOrigem[i];
+      if (!lo) continue;
+      const cdO = origens[i];
+      let excesso = excessoTransferivel(lo, comPendente);
+      if (usarAprovadas && excesso > 0) {
+        excesso = Math.max(
+          excesso - (compromissos.saidaOrigem.get(chaveCdProduto(cdO, codigoProduto)) ?? 0),
+          0,
+        );
+      }
+      if (excesso <= EPS) continue;
+
+      const preco = precoRef[i];
+      const regras: RegrasLote = {
+        embCompra: lo.embCompra,
+        preco,
+        caixaFechada,
+        minUnidades: minUn,
+        minValor: minVal,
+      };
+      const slotProprio = posDestino.get(cdO); // a origem nunca é destino de si mesma
+
+      for (let d = 0; d < nDst; d++) {
+        transfDst[d] = 0;
+        perdaDst[d] = 0;
+        demandaVistaDst[d] = slotProprio === d ? 0 : totBuf[d];
+        for (let m = 0; m < nMes; m++) {
+          transfDstMes[d][m] = 0;
+          demandaDstMes[d][m] = slotProprio === d ? 0 : mesBuf[m * nDst + d];
+        }
+      }
+
+      // Fator de consumo do orçamento operacional para este SKU.
+      const fatorCap = orc.ativo ? fatorCapacidade(lo, orc.metrica, preco) : 0;
+      if (orc.ativo && fatorCap <= 0) skusSemFator.add(codigoProduto);
+
+      if (nivelar) {
+        // Nivelamento por dias de cobertura, com teto de capacidade por destino.
+        let excessoRestante = excesso;
+        for (let d = 0; d < nDst; d++) {
+          const pedido = demandaVistaDst[d];
+          const capDisp = orc.disponivelUnidades(i, d, fatorCap);
+          const alvo = Math.min(pedido, capDisp);
+          alvoDst[d] = alvo;
+          const barrado = Math.min(Math.max(pedido - alvo, 0), excessoRestante);
+          if (barrado > EPS) {
+            orc.registrarBloqueio(i, d, barrado, fatorCap);
+            qtdBloqueadaPorCapacidade += barrado;
+            valorBloqueadoPorCapacidade += barrado * preco;
+          }
+        }
+        const alocado = nivelarPorCobertura(alvoDst, estoqueDst, vdDst, excesso);
+        for (let d = 0; d < nDst; d++) {
+          const q = ajustarLote(alocado[d], regras);
+          if (q <= 0) continue;
+          transfDst[d] = q;
+          perdaDst[d] = Math.max(alocado[d] - q, 0);
+          orc.consumir(i, d, q, fatorCap);
+          excessoRestante -= q;
+          if (usaPedidos) {
+            // Distribui a cota do destino do mês mais próximo para o mais distante.
+            let resto = q;
+            for (let m = 0; m < nMes && resto > EPS; m++) {
+              const usa = Math.min(resto, demandaDstMes[d][m]);
+              transfDstMes[d][m] = usa;
+              resto -= usa;
+            }
+            if (resto > EPS && nMes > 0) transfDstMes[d][0] += resto; // piso antirruptura
+          }
+        }
+      } else {
+        // Prioridade estrita: mês → destino (modo pedidos) ou destino (saldo ideal).
+        // O laço é sequencial porque cada alocação muda três saldos ao mesmo
+        // tempo: o excesso da origem, a demanda do destino e a capacidade.
+        const nBaldes = usaPedidos ? nMes * nDst : nDst;
+        let saldo = excesso;
+        for (let b = 0; b < nBaldes; b++) {
+          if (saldo <= EPS) break;
+          const d = usaPedidos ? b % nDst : b;
+          const m = usaPedidos ? Math.floor(b / nDst) : -1;
+          const demanda = usaPedidos ? demandaDstMes[d][m] : demandaVistaDst[d];
+          if (demanda <= EPS) continue;
+
+          const desejado = Math.min(demanda, saldo);
+          const capDisp = orc.disponivelUnidades(i, d, fatorCap);
+          const permitido = Math.min(desejado, capDisp);
+          const barrado = desejado - permitido;
+          if (barrado > EPS) {
+            orc.registrarBloqueio(i, d, barrado, fatorCap);
+            qtdBloqueadaPorCapacidade += barrado;
+            valorBloqueadoPorCapacidade += barrado * preco;
+          }
+
+          const q = ajustarLote(permitido, regras);
+          perdaDst[d] += Math.max(permitido - q, 0);
+          if (q <= 0) continue;
+          transfDst[d] += q;
+          if (m >= 0) transfDstMes[d][m] = q;
+          saldo -= q;
+          orc.consumir(i, d, q, fatorCap);
+        }
+      }
+
+      // ------------------------- Materialização ---------------------------
+      const cov = cobertura(lo, params.limiteCoberturaDias);
+      let saldoImediato = Math.max(lo.estoqueDisponivel - lo.vendaMedia3m * fs, 0);
+      let transferidoOrigem = 0;
+
+      for (let d = 0; d < nDst; d++) {
+        const cdD = destinos[d];
+        const total = transfDst[d];
+        if (total <= EPS) continue;
+        if (cdD === cdO) {
+          autoTransferencias++; // nunca deve ocorrer
+          continue;
+        }
+
+        // Consome a demanda compartilhada (some para as próximas origens).
+        totBuf[d] = Math.max(totBuf[d] - total, 0);
+        if (usaPedidos) {
+          for (let m = 0; m < nMes; m++) {
+            const b = m * nDst + d;
+            mesBuf[b] = Math.max(mesBuf[b] - transfDstMes[d][m], 0);
+          }
+        }
+        transferidoOrigem += total;
+
+        const valorTotal = total * preco;
+        const baseImediata = usaPedidos ? transfDstMes[d][0] ?? 0 : total;
+        const qtdImediata = Math.min(baseImediata, saldoImediato);
+        saldoImediato = Math.max(saldoImediato - qtdImediata, 0);
+        let imediataCaixas = 0;
+        let qtdImediataArred = 0;
+        if (lo.embCompra > 0 && qtdImediata > 0) {
+          imediataCaixas = Math.max(roundDown(qtdImediata / lo.embCompra), 0);
+          qtdImediataArred = imediataCaixas * lo.embCompra;
+        }
+        const rotaKey = chaveRota(cdO, cdD);
+        const aliquota = params.aliquotas[rotaKey] ?? 0;
+
+        linhas.push({
+          cdOrigem: cdO,
+          cdDestino: cdD,
+          rota: rotaKey,
+          idSku: `${cdO}-${codigoProduto}`,
+          codigoProduto,
+          produto: lo.produto,
+          fornecedor: lo.fornecedor,
+          comprador: lo.comprador,
+          analista: lo.analista,
+          categoriaN1: lo.categoriaN1,
+          categoriaN2: lo.categoriaN2,
+          categoriaN3: lo.categoriaN3,
+          categoriaN4: lo.categoriaN4,
+          precoUnitario: preco,
+          embCompra: lo.embCompra,
+          demandaMes: usaPedidos ? [...demandaDstMes[d]] : [],
+          transfMes: usaPedidos ? [...transfDstMes[d]] : [],
+          demandaSaldo: usaPedidos ? 0 : demandaVistaDst[d],
+          transfSaldo: usaPedidos ? 0 : total,
+          transfTotal: total,
+          perdaCaixaFechada: perdaDst[d],
+          valorTotal,
+          caixas: lo.embCompra > 0 ? round(total / lo.embCompra) : 0,
+          qtdImediata,
+          imediataCaixas,
+          qtdImediataArredondada: qtdImediataArred,
+          valorImediata: qtdImediataArred * preco,
+          coberturaDias: cov.dias,
+          statusCobertura: cov.status,
+          aliquota,
+          impactoFiscal: valorTotal * aliquota,
+        });
+      }
+
+      if (validar && transferidoOrigem - excesso > 1e-6) {
+        invarianteOk = false;
+        maiorDivergencia = Math.max(maiorDivergencia, transferidoOrigem - excesso);
+      }
+    }
   }
 
-  const resumo = cds.map((cd) => resumoMap.get(cd)!);
-  const impactoFiscalTotal = resumo.reduce((a, r) => a + r.impactoFiscal, 0);
-  const alertaAliquotas = resumo
-    .filter((r) => !r.aliquotaDefinida && (r.valorTransfMes.some((v) => v > 0) || r.valorTransfObjetivo > 0))
-    .map((r) => r.cdDestino);
+  // --------- Carga mínima por rota: rota abaixo do piso não embarca ---------
+  let linhasFinais = linhas;
+  if (minValRota > 0) {
+    const valorPorRota = new Map<string, number>();
+    for (const l of linhas) valorPorRota.set(l.rota, (valorPorRota.get(l.rota) ?? 0) + l.valorTotal);
+    const descartadas = new Set<string>();
+    for (const [rota, valor] of valorPorRota) if (valor < minValRota) descartadas.add(rota);
+    if (descartadas.size > 0) linhasFinais = linhas.filter((l) => !descartadas.has(l.rota));
+  }
+
+  // ------------------------- Resumos a partir das linhas -------------------
+  const rotaMap = new Map<string, ResumoRota>();
+  const skusDistintos = new Set<number>();
+  let valorTransfTotal = 0;
+  let qtdTransfTotal = 0;
+  let valorImediataTotal = 0;
+  let impactoFiscalTotal = 0;
+
+  for (const l of linhasFinais) {
+    let r = rotaMap.get(l.rota);
+    if (!r) {
+      r = {
+        cdOrigem: l.cdOrigem,
+        cdDestino: l.cdDestino,
+        rota: l.rota,
+        aliquota: l.aliquota,
+        aliquotaDefinida: params.aliquotas[l.rota] !== undefined,
+        qtdMes: new Array(nMes).fill(0),
+        valorMes: new Array(nMes).fill(0),
+        qtd: 0,
+        valor: 0,
+        qtdImediata: 0,
+        valorImediata: 0,
+        impactoFiscal: 0,
+        linhas: 0,
+        capacidadeLimite: 0,
+        capacidadeComprometida: 0,
+        capacidadeUsada: 0,
+        bloqueadoPorCapacidade: 0,
+      };
+      rotaMap.set(l.rota, r);
+    }
+    for (let m = 0; m < nMes; m++) {
+      const t = l.transfMes[m] ?? 0;
+      r.qtdMes[m] += t;
+      r.valorMes[m] += t * l.precoUnitario;
+    }
+    r.qtd += l.transfTotal;
+    r.valor += l.valorTotal;
+    r.qtdImediata += l.qtdImediata;
+    r.valorImediata += l.valorImediata;
+    r.impactoFiscal += l.impactoFiscal;
+    r.linhas++;
+
+    const ro = resumoOrigem[posOrigem.get(l.cdOrigem) ?? -1];
+    if (ro) {
+      ro.transferidoQtd += l.transfTotal;
+      ro.transferidoRs += l.valorTotal;
+    }
+    const rd = resumoDestino[posDestino.get(l.cdDestino) ?? -1];
+    if (rd) {
+      rd.atendidoQtd += l.transfTotal;
+      rd.atendidoRs += l.valorTotal;
+    }
+
+    skusDistintos.add(l.codigoProduto);
+    valorTransfTotal += l.valorTotal;
+    qtdTransfTotal += l.transfTotal;
+    valorImediataTotal += l.valorImediata;
+    impactoFiscalTotal += l.impactoFiscal;
+  }
+
+  for (let i = 0; i < resumoOrigem.length; i++) {
+    const ro = resumoOrigem[i];
+    ro.sobraQtd = Math.max(ro.excessoQtd - ro.transferidoQtd, 0);
+    ro.sobraRs = Math.max(ro.excessoRs - ro.transferidoRs, 0);
+    ro.capacidadeLimite = orc.limite("origem", i);
+    ro.capacidadeComprometida = orc.compOrigem[i];
+    ro.capacidadeUsada = orc.uso("origem", i);
+    ro.bloqueadoPorCapacidade = orc.bloqOrigem[i];
+  }
+  for (let d = 0; d < resumoDestino.length; d++) {
+    const rd = resumoDestino[d];
+    rd.capacidadeLimite = orc.limite("destino", d);
+    rd.capacidadeComprometida = orc.compDestino[d];
+    rd.capacidadeUsada = orc.uso("destino", d);
+    rd.bloqueadoPorCapacidade = orc.bloqDestino[d];
+    rd.aberto = Math.max(rd.necessidadeQtd - rd.atendidoQtd, 0);
+    rd.cobertura = rd.necessidadeQtd > 0 ? rd.atendidoQtd / rd.necessidadeQtd : 0;
+    if (validar && rd.atendidoQtd - rd.necessidadeQtd > 1e-6) {
+      invarianteOk = false;
+      maiorDivergencia = Math.max(maiorDivergencia, rd.atendidoQtd - rd.necessidadeQtd);
+    }
+  }
+
+  const posO = new Map(origens.map((c, i) => [c, i]));
+  const posD = new Map(destinos.map((c, i) => [c, i]));
+  const rotas = Array.from(rotaMap.values()).sort(
+    (a, b) =>
+      (posO.get(a.cdOrigem) ?? 99) - (posO.get(b.cdOrigem) ?? 99) ||
+      (posD.get(a.cdDestino) ?? 99) - (posD.get(b.cdDestino) ?? 99),
+  );
+  for (const r of rotas) {
+    const io = posOrigem.get(r.cdOrigem);
+    const id = posDestino.get(r.cdDestino);
+    if (io === undefined || id === undefined) continue;
+    r.capacidadeLimite = orc.limiteRota(io, id);
+    r.capacidadeComprometida = orc.compRota[io][id];
+    r.capacidadeUsada = orc.usoRotaDe(io, id);
+    r.bloqueadoPorCapacidade = orc.bloqRota[io][id];
+  }
+  const rotasSemAliquota = rotas.filter((r) => !r.aliquotaDefinida && r.valor > 0).map((r) => r.rota);
+  const excessoDisponivelRs = resumoOrigem.reduce((a, r) => a + r.excessoRs, 0);
+
+  // Gargalos: onde a capacidade barrou transferência, do maior para o menor.
+  const gargalos: { tipo: "origem" | "destino" | "rota"; id: string; bloqueado: number }[] = [];
+  for (const ro of resumoOrigem)
+    if (ro.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "origem", id: `CD ${ro.cd}`, bloqueado: ro.bloqueadoPorCapacidade });
+  for (const rd of resumoDestino)
+    if (rd.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "destino", id: `CD ${rd.cd}`, bloqueado: rd.bloqueadoPorCapacidade });
+  for (const r of rotas)
+    if (r.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "rota", id: r.rota, bloqueado: r.bloqueadoPorCapacidade });
+  gargalos.sort((a, b) => b.bloqueado - a.bloqueado);
 
   const reconciliacao: Reconciliacao = {
-    skusTotal: posicao.length,
-    skusComExcesso,
+    skusBase: base.length,
+    produtosDistintos: porProduto.size,
+    paresOrigemProduto,
     invarianteOk,
     maiorDivergencia,
+    autoTransferencias,
   };
 
   if (opts.onProgresso) opts.onProgresso(1);
 
   return {
-    linhas,
-    resumo,
+    linhas: linhasFinais,
+    rotas,
+    origens: resumoOrigem,
+    destinos: resumoDestino,
     reconciliacao,
     meta: {
-      modelo,
-      excessoSimplesRs,
-      excessoTotalRs,
-      valorTransfMesTotal,
-      valorTransfObjetivoTotal,
+      modoDemanda: modo,
+      meses,
+      sequenciaOrigens: origens,
+      sequenciaDestinos: destinos,
+      excessoDisponivelRs,
+      excessoUtilizadoRs: valorTransfTotal,
+      necessidadeTotalRs,
+      necessidadeAtendidaRs: valorTransfTotal,
+      valorTransfTotal,
       valorImediataTotal,
       impactoFiscalTotal,
+      qtdTransfTotal,
+      linhasPlano: linhasFinais.length,
+      skusDistintos: skusDistintos.size,
       tempoMs: Date.now() - t0,
-      meses,
-      prioridadeCds: cds,
-      alertaAliquotasIncompletas: alertaAliquotas,
+      rotasSemAliquota,
+      metricaCapacidade: orc.metrica,
+      qtdBloqueadaPorCapacidade,
+      valorBloqueadoPorCapacidade,
+      skusSemFatorCapacidade: skusSemFator.size,
+      gargalos,
     },
   };
 }
 
-/** Constrói o índice de pedidos a partir das linhas (join O(1) por chave). */
-export function indexarPedidos(pedidos: { anoMes: string; cdDestino: number; codigoProduto: number; pedido: number }[]): PedidosIndex {
-  const idx: PedidosIndex = new Map();
-  for (const p of pedidos) {
-    idx.set(chavePedido(p.anoMes, p.cdDestino, p.codigoProduto), p.pedido);
-  }
-  return idx;
-}
-
-/**
- * Constrói o índice de estoque objetivo por (cd, produto) — join O(1) por chave.
- * Se houver linhas repetidas para a mesma (cd, produto), soma os saldos.
- */
-export function indexarObjetivos(objetivos: ObjetivoDestino[]): ObjetivoIndex {
-  const idx: ObjetivoIndex = new Map();
-  for (const o of objetivos) {
-    const k = chaveObjetivo(o.cdDestino, o.codigoProduto);
-    idx.set(k, (idx.get(k) ?? 0) + o.saldoEstoqueObjetivo);
-  }
-  return idx;
-}
-
-/** Filtra linhas do plano por cobertura (Total vs. crítico > limite). */
-export function filtrarPorCobertura(linhas: LinhaPlano[], filtro: FiltroCobertura, limiteDias: number): LinhaPlano[] {
+/** Filtra linhas do plano por cobertura do SKU na origem. */
+export function filtrarPorCobertura(
+  linhas: LinhaPlano[],
+  filtro: FiltroCobertura,
+  limiteDias: number,
+): LinhaPlano[] {
   if (filtro === "total") return linhas;
   return linhas.filter((l) => l.coberturaDias > limiteDias);
 }

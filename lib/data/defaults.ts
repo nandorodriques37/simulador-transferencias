@@ -1,4 +1,4 @@
-import { Parametros } from "@/lib/engine/types";
+import { capacidadeVazia, ParametrosRede } from "@/lib/engine/types";
 
 /** Retorna 'AAAA_MM' para o mês corrente + offset. */
 export function mesOffset(offset: number, base = new Date()): string {
@@ -21,17 +21,38 @@ export function rotuloMes(anoMes: string): string {
   return `${NOMES_MES[mes] ?? mes}/${ano?.slice(2) ?? ""}`;
 }
 
-/** Parâmetros padrão (equivalem aos valores da planilha original). */
-export function parametrosPadrao(base = new Date()): Parametros {
+/** CDs da rede usados na base de demonstração. */
+export const CDS_DEMO = [10, 1, 2, 7, 8, 9];
+
+/**
+ * Parâmetros padrão de uma análise. Origens e destinos são apenas um ponto de
+ * partida: ao importar a base, o app sugere a sequência com os CDs presentes.
+ */
+export function parametrosPadrao(base = new Date()): ParametrosRede {
   return {
-    modelo: "drp",
-    cdOrigem: CD_ORIGEM_PADRAO,
-    prioridadeCds: [1, 9, 2, 8, 7],
+    modoDemanda: "saldo_ideal",
+    origens: [10],
+    destinos: [1, 9, 2, 8, 7],
     horizonteMeses: horizontePadrao(base),
-    aliquotaFiscal: { 1: 0.052, 9: 0.015 }, // CD2/8/7 a definir
+    aliquotas: { "10>1": 0.052, "10>9": 0.015 },
     fatorSegurancaImediata: 0.5,
     limiteCoberturaDias: 90,
+    considerarAprovadas: true,
+    // Oferta: por padrão o excesso é de planejamento (conta o pendente).
+    considerarPendenteOrigem: true,
+    limitesCoberturaAtivos: true,
+    // Necessidade: sem teto/piso por padrão — o resultado sai igual ao da regra
+    // crua da base. Recomendado ligar o teto em 60–90 dias e o piso em 15–30.
+    coberturaMaxDestinoDias: 0,
+    coberturaMinDestinoDias: 0,
+    estrategiaDestino: "prioridade",
+    limitesEmbarqueAtivos: true,
+    // Materialidade: desligada por padrão (nada é descartado sem o usuário pedir).
+    arredondarCaixaFechada: false,
+    minUnidadesLinha: 0,
+    minValorLinha: 0,
+    minValorRota: 0,
+    // Capacidade operacional: sem limites por padrão.
+    capacidade: capacidadeVazia(),
   };
 }
-
-export const CD_ORIGEM_PADRAO = 10;
