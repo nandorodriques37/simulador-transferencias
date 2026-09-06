@@ -28,6 +28,17 @@ export function normalizarParametros(
   if (typeof body.limiteCoberturaDias !== "number" || body.limiteCoberturaDias <= 0)
     return { erro: "limite de cobertura inválido" };
 
+  const num = (v: unknown, padrao = 0) => {
+    const n = Number(v);
+    return isNaN(n) || n < 0 ? padrao : n;
+  };
+  const coberturaMax = num(body.coberturaMaxDestinoDias);
+  const coberturaMin = num(body.coberturaMinDestinoDias);
+  if (coberturaMax > 0 && coberturaMin > coberturaMax)
+    return { erro: "o piso de cobertura do destino não pode ser maior que o teto" };
+  if (body.estrategiaDestino && body.estrategiaDestino !== "prioridade" && body.estrategiaDestino !== "nivelar_cobertura")
+    return { erro: "estratégia de destino inválida" };
+
   return {
     params: {
       modoDemanda: body.modoDemanda,
@@ -40,6 +51,14 @@ export function normalizarParametros(
       fatorSegurancaImediata: Number(body.fatorSegurancaImediata),
       limiteCoberturaDias: Number(body.limiteCoberturaDias),
       considerarAprovadas: body.considerarAprovadas !== false,
+      considerarPendenteOrigem: body.considerarPendenteOrigem !== false,
+      coberturaMaxDestinoDias: coberturaMax,
+      coberturaMinDestinoDias: coberturaMin,
+      estrategiaDestino: body.estrategiaDestino === "nivelar_cobertura" ? "nivelar_cobertura" : "prioridade",
+      arredondarCaixaFechada: body.arredondarCaixaFechada === true,
+      minUnidadesLinha: num(body.minUnidadesLinha),
+      minValorLinha: num(body.minValorLinha),
+      minValorRota: num(body.minValorRota),
     },
   };
 }

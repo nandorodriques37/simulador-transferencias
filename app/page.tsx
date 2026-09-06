@@ -11,7 +11,7 @@ interface ResumoRota {
   qtdImediata: number; valorImediata: number; impactoFiscal: number; linhas: number;
 }
 interface ResumoOrigem { cd: number; ordem: number; excessoQtd: number; excessoRs: number; transferidoQtd: number; transferidoRs: number; sobraQtd: number; sobraRs: number; skusComExcesso: number }
-interface ResumoDestino { cd: number; ordem: number; necessidadeQtd: number; necessidadeRs: number; atendidoQtd: number; atendidoRs: number; aberto: number; cobertura: number }
+interface ResumoDestino { cd: number; ordem: number; necessidadeBrutaQtd: number; necessidadeQtd: number; necessidadeRs: number; atendidoQtd: number; atendidoRs: number; aberto: number; cobertura: number }
 interface DashResp {
   analise: { id: string; label: string; criadoEm: string; criadoPor: string; fonteBase: string };
   cobertura: "total" | "acima_limite";
@@ -20,6 +20,14 @@ interface DashResp {
   sequenciaOrigens: number[];
   sequenciaDestinos: number[];
   consideraAprovadas: boolean;
+  regras: {
+    coberturaMaxDestinoDias: number;
+    coberturaMinDestinoDias: number;
+    estrategiaDestino: "prioridade" | "nivelar_cobertura";
+    considerarPendenteOrigem: boolean;
+    arredondarCaixaFechada: boolean;
+    minValorRota: number;
+  };
   kpis: {
     excessoDisponivelRs: number; valorTransfTotal: number; qtdTransfTotal: number;
     necessidadeTotalRs: number; coberturaNecessidade: number; usoDoExcesso: number;
@@ -109,6 +117,11 @@ export default function Dashboard() {
         <Badge tom="brand">Destinos: {data.sequenciaDestinos.map((c) => `CD${c}`).join(" → ")}</Badge>
         {modoPedidos && <Badge tom="warn">Meses: {meses.map(rotuloMes).join(" · ")}</Badge>}
         {data.consideraAprovadas && <Badge tom="good">Descontando sugestões aprovadas em aberto</Badge>}
+        {data.regras?.coberturaMaxDestinoDias > 0 && <Badge>Teto {data.regras.coberturaMaxDestinoDias}d de cobertura</Badge>}
+        {data.regras?.coberturaMinDestinoDias > 0 && <Badge>Piso {data.regras.coberturaMinDestinoDias}d</Badge>}
+        {data.regras?.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura entre destinos</Badge>}
+        {data.regras && !data.regras.considerarPendenteOrigem && <Badge tom="azul">Excesso físico (sem pendente)</Badge>}
+        {data.regras?.arredondarCaixaFechada && <Badge>Só caixa fechada</Badge>}
       </div>
 
       {kpis.rotasSemAliquota.length > 0 && (
@@ -223,7 +236,14 @@ export default function Dashboard() {
                 <tr key={d.cd} className="border-b border-slate-100">
                   <td className="td text-slate-400">{d.ordem}</td>
                   <td className="td font-semibold">CD {d.cd}</td>
-                  <td className="td num">{fmtRsCompacto(d.necessidadeRs)}</td>
+                  <td className="td num">
+                    {fmtRsCompacto(d.necessidadeRs)}
+                    {Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1 && (
+                      <div className="text-[10px] text-slate-400" title="demanda crua antes do teto/piso de cobertura">
+                        bruta {fmtInt(d.necessidadeBrutaQtd)} un → {fmtInt(d.necessidadeQtd)} un
+                      </div>
+                    )}
+                  </td>
                   <td className="td num">{fmtRsCompacto(d.atendidoRs)}</td>
                   <td className="td">
                     <div className="flex items-center gap-2">

@@ -17,6 +17,14 @@ interface Parametros {
   fatorSegurancaImediata: number;
   limiteCoberturaDias: number;
   considerarAprovadas: boolean;
+  considerarPendenteOrigem: boolean;
+  coberturaMaxDestinoDias: number;
+  coberturaMinDestinoDias: number;
+  estrategiaDestino: "prioridade" | "nivelar_cobertura";
+  arredondarCaixaFechada: boolean;
+  minUnidadesLinha: number;
+  minValorLinha: number;
+  minValorRota: number;
 }
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { baseLinhas: number; pedidosLinhas: number; cdsBase: number[]; achados: Achado[]; ok: boolean }
@@ -229,6 +237,28 @@ export default function NovaAnalise() {
             )}
 
             <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="label mb-1.5">Limites de cobertura do destino</div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="block text-[11px] text-slate-500">Teto (dias) · 0 = sem teto · sugerido 60–90</span>
+                  <input type="number" min="0" value={params.coberturaMaxDestinoDias} onChange={(e) => set({ coberturaMaxDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] text-slate-500">Piso (dias) · 0 = sem piso · sugerido 15–30</span>
+                  <input type="number" min="0" value={params.coberturaMinDestinoDias} onChange={(e) => set({ coberturaMinDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
+                </label>
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                O <b>teto</b> impede que um estoque objetivo inflado (ou meses de pedido) puxe volume demais para um CD.
+                O <b>piso</b> garante o mínimo antirruptura mesmo com objetivo defasado ou zerado. SKU sem giro no destino
+                ignora os dois.
+              </p>
+              {params.coberturaMaxDestinoDias > 0 && params.coberturaMinDestinoDias > params.coberturaMaxDestinoDias && (
+                <div className="mt-2"><Alert tom="erro">O piso não pode ser maior que o teto.</Alert></div>
+              )}
+            </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-3">
               <label className="flex items-start gap-2">
                 <input type="checkbox" checked={params.considerarAprovadas} onChange={(e) => set({ considerarAprovadas: e.target.checked })} className="mt-0.5" />
                 <span>
@@ -246,6 +276,18 @@ export default function NovaAnalise() {
         <div className="lg:col-span-1">
           <Secao titulo="3 · Sequência das origens" desc="Quem escoa o excesso primeiro. A ordem muda o resultado.">
             <SequenciaCds papel="origem" selecionados={params.origens} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ origens: cds })} />
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <label className="flex items-start gap-2">
+                <input type="checkbox" checked={params.considerarPendenteOrigem} onChange={(e) => set({ considerarPendenteOrigem: e.target.checked })} className="mt-0.5" />
+                <span>
+                  <span className="block text-sm font-medium text-slate-800">Somar a quantidade pendente ao excesso</span>
+                  <span className="block text-xs text-slate-500">
+                    Ligado: excesso de planejamento (conta o que ainda vai entrar). Desligado: excesso <b>físico</b> —
+                    só o que já está no CD pode ser oferecido, sem sugerir a transferência do que não chegou.
+                  </span>
+                </span>
+              </label>
+            </div>
           </Secao>
         </div>
 
@@ -253,6 +295,26 @@ export default function NovaAnalise() {
         <div className="lg:col-span-1">
           <Secao titulo="4 · Ordem dos destinos" desc="Cada origem olha todos estes destinos, nesta prioridade.">
             <SequenciaCds papel="destino" selecionados={params.destinos} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ destinos: cds })} excluir={params.origens} />
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <div className="label mb-1.5">Quando o excesso não cobre todos</div>
+              <div className="flex flex-col gap-2">
+                <label className={`flex cursor-pointer gap-2 rounded-lg border p-2.5 ${params.estrategiaDestino === "prioridade" ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
+                  <input type="radio" checked={params.estrategiaDestino === "prioridade"} onChange={() => set({ estrategiaDestino: "prioridade" })} className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-800">Prioridade estrita</span>
+                    <span className="block text-xs text-slate-500">O destino 1 é atendido por inteiro antes do 2.</span>
+                  </span>
+                </label>
+                <label className={`flex cursor-pointer gap-2 rounded-lg border p-2.5 ${params.estrategiaDestino === "nivelar_cobertura" ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
+                  <input type="radio" checked={params.estrategiaDestino === "nivelar_cobertura"} onChange={() => set({ estrategiaDestino: "nivelar_cobertura" })} className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-800">Nivelar dias de cobertura</span>
+                    <span className="block text-xs text-slate-500">Enche primeiro quem está mais descoberto — evita ruptura no último da fila.</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
             {params.destinos.some((d) => params.origens.includes(d)) && (
               <div className="mt-2">
                 <Alert tom="info">CDs que são origem e destino ao mesmo tempo são permitidos — o motor só nunca transfere um CD para ele mesmo.</Alert>
@@ -275,13 +337,42 @@ export default function NovaAnalise() {
                 <input type="number" min="1" value={params.limiteCoberturaDias} onChange={(e) => set({ limiteCoberturaDias: Number(e.target.value) })} className="input w-full" />
                 <p className="mt-1 text-[11px] text-slate-500">Classifica o SKU parado na origem.</p>
               </div>
-              <div className="md:col-span-2">
+              <div>
+                <div className="label mb-1">Mínimo por linha (un)</div>
+                <input type="number" min="0" value={params.minUnidadesLinha} onChange={(e) => set({ minUnidadesLinha: Number(e.target.value) })} className="input w-full" />
+                <p className="mt-1 text-[11px] text-slate-500">Abaixo disso a linha não embarca.</p>
+              </div>
+              <div>
+                <div className="label mb-1">Mínimo por linha (R$)</div>
+                <input type="number" min="0" step="10" value={params.minValorLinha} onChange={(e) => set({ minValorLinha: Number(e.target.value) })} className="input w-full" />
+                <p className="mt-1 text-[11px] text-slate-500">Corta a cauda longa sem valor.</p>
+              </div>
+              <div>
+                <div className="label mb-1">Carga mínima por rota (R$)</div>
+                <input type="number" min="0" step="100" value={params.minValorRota} onChange={(e) => set({ minValorRota: Number(e.target.value) })} className="input w-full" />
+                <p className="mt-1 text-[11px] text-slate-500">Rota abaixo do piso sai do plano inteira.</p>
+              </div>
+              <div className="flex items-start pt-5">
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={params.arredondarCaixaFechada} onChange={(e) => set({ arredondarCaixaFechada: e.target.checked })} className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium text-slate-800">Só caixa fechada</span>
+                    <span className="block text-[11px] text-slate-500">Transfere múltiplos da embalagem; o resto fica na origem.</span>
+                  </span>
+                </label>
+              </div>
+              <div className="md:col-span-4">
                 <div className="label mb-1">Resumo da rede</div>
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   <Badge tom="azul">{params.origens.length} origem(ns)</Badge>
                   <Badge tom="brand">{params.destinos.length} destino(s)</Badge>
                   <Badge>{rotas.length} rota(s)</Badge>
                   <Badge tom={modoPedidos ? "warn" : "good"}>{modoPedidos ? `Pedidos · ${params.horizonteMeses.length} mês(es)` : "Saldo ideal"}</Badge>
+                  {params.coberturaMaxDestinoDias > 0 && <Badge>Teto {params.coberturaMaxDestinoDias}d</Badge>}
+                  {params.coberturaMinDestinoDias > 0 && <Badge>Piso {params.coberturaMinDestinoDias}d</Badge>}
+                  {params.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura</Badge>}
+                  {!params.considerarPendenteOrigem && <Badge tom="azul">Excesso físico</Badge>}
+                  {params.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
                 </div>
               </div>
             </div>

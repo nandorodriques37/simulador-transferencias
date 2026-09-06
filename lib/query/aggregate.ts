@@ -71,6 +71,7 @@ export function agregarPorOrigem(linhas: LinhaPlano[], baseOrigens: ResumoOrigem
 export function agregarPorDestino(linhas: LinhaPlano[], baseDestinos: ResumoDestino[]): ResumoDestino[] {
   const map = new Map<number, ResumoDestino>();
   for (const d of baseDestinos) map.set(d.cd, { ...d, atendidoQtd: 0, atendidoRs: 0 });
+
   for (const l of linhas) {
     const d = map.get(l.cdDestino);
     if (!d) continue;

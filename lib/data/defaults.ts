@@ -38,5 +38,17 @@ export function parametrosPadrao(base = new Date()): ParametrosRede {
     fatorSegurancaImediata: 0.5,
     limiteCoberturaDias: 90,
     considerarAprovadas: true,
+    // Oferta: por padrão o excesso é de planejamento (conta o pendente).
+    considerarPendenteOrigem: true,
+    // Necessidade: sem teto/piso por padrão — o resultado sai igual ao da regra
+    // crua da base. Recomendado ligar o teto em 60–90 dias e o piso em 15–30.
+    coberturaMaxDestinoDias: 0,
+    coberturaMinDestinoDias: 0,
+    estrategiaDestino: "prioridade",
+    // Materialidade: desligada por padrão (nada é descartado sem o usuário pedir).
+    arredondarCaixaFechada: false,
+    minUnidadesLinha: 0,
+    minValorLinha: 0,
+    minValorRota: 0,
   };
 }

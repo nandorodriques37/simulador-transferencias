@@ -6,6 +6,7 @@ import {
   excessoTransferivel,
   indexarPedidos,
   necessidadeSaldoIdeal,
+  nivelarPorCobertura,
   precoUnitario,
 } from "./calc";
 import {
@@ -55,6 +56,14 @@ function params(over: Partial<ParametrosRede> = {}): ParametrosRede {
     fatorSegurancaImediata: 0.5,
     limiteCoberturaDias: 90,
     considerarAprovadas: true,
+    considerarPendenteOrigem: true,
+    coberturaMaxDestinoDias: 0,
+    coberturaMinDestinoDias: 0,
+    estrategiaDestino: "prioridade",
+    arredondarCaixaFechada: false,
+    minUnidadesLinha: 0,
+    minValorLinha: 0,
+    minValorRota: 0,
     ...over,
   };
 }
@@ -347,5 +356,178 @@ describe("performance", () => {
     expect(r.linhas.length).toBeGreaterThan(0);
     expect(r.reconciliacao.invarianteOk).toBe(true);
     expect(ms).toBeLessThan(10000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regras de qualidade da necessidade, da oferta e do embarque
+// ---------------------------------------------------------------------------
+
+describe("teto e piso de cobertura no destino", () => {
+  it("teto limita a necessidade a N dias de cobertura (saldo ideal)", () => {
+    // CD1 vende 300/mês (10/dia) e tem objetivo inflado de 1000 un.
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 5000 }),
+      linha(1, 100, { estoqueObjetivo: 1000, vendaMedia3m: 300 }),
+    ];
+    const semTeto = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(semTeto.linhas[0].transfSaldo).toBe(1000);
+
+    const comTeto = rodar(b, params({ origens: [10], destinos: [1], coberturaMaxDestinoDias: 60 }));
+    expect(comTeto.linhas[0].transfSaldo).toBe(600); // 10/dia × 60 dias
+    expect(comTeto.destinos[0].necessidadeBrutaQtd).toBe(1000);
+    expect(comTeto.destinos[0].necessidadeQtd).toBe(600);
+  });
+
+  it("teto corta os pedidos do mês mais distante para o mais próximo", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 5000 }), linha(1, 100, { vendaMedia3m: 300 })];
+    const r = rodar(
+      b,
+      params({ modoDemanda: "pedidos", origens: [10], destinos: [1], coberturaMaxDestinoDias: 60 }),
+      [
+        { anoMes: "2026_09", cdDestino: 1, codigoProduto: 100, pedido: 400 },
+        { anoMes: "2026_10", cdDestino: 1, codigoProduto: 100, pedido: 400 },
+      ],
+    );
+    // Teto de 600 un: mantém set (400) e corta out para 200.
+    expect(r.linhas[0].transfMes).toEqual([400, 200]);
+  });
+
+  it("piso garante a demanda antirruptura quando o objetivo está zerado", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 5000 }),
+      linha(1, 100, { estoqueObjetivo: 0, estoqueDisponivel: 30, vendaMedia3m: 300 }),
+    ];
+    const semPiso = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(semPiso.linhas).toHaveLength(0);
+
+    const comPiso = rodar(b, params({ origens: [10], destinos: [1], coberturaMinDestinoDias: 30 }));
+    expect(comPiso.linhas[0].transfSaldo).toBe(270); // 10/dia × 30 dias − 30 em casa
+  });
+
+  it("SKU sem giro no destino fica fora do teto e do piso", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 400, vendaMedia3m: 0 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], coberturaMaxDestinoDias: 60, coberturaMinDestinoDias: 30 }));
+    expect(r.linhas[0].transfSaldo).toBe(400);
+  });
+});
+
+describe("excesso físico × excesso de planejamento", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 100, quantidadePendente: 900 }),
+    linha(1, 100, { estoqueObjetivo: 1000 }),
+  ];
+
+  it("por padrão o pendente entra no excesso", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1] }));
+    expect(r.origens[0].excessoQtd).toBe(1000);
+    expect(r.linhas[0].transfSaldo).toBe(1000);
+  });
+
+  it("desligando o pendente, só o que está no CD é oferecido", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1], considerarPendenteOrigem: false }));
+    expect(r.origens[0].excessoQtd).toBe(100);
+    expect(r.linhas[0].transfSaldo).toBe(100);
+  });
+});
+
+describe("caixa fechada e materialidade", () => {
+  it("transfere só múltiplos da embalagem e o resto segue para o próximo destino", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 100, embCompra: 30 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+      linha(2, 100, { estoqueObjetivo: 100 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], arredondarCaixaFechada: true }));
+    const cd1 = r.linhas.find((l) => l.cdDestino === 1)!;
+    const cd2 = r.linhas.find((l) => l.cdDestino === 2)!;
+    expect(cd1.transfSaldo).toBe(30); // 1 caixa (pedia 50)
+    expect(cd1.perdaCaixaFechada).toBe(20);
+    expect(cd2.transfSaldo).toBe(60); // 2 caixas do saldo de 70
+    expect(cd1.transfSaldo % 30).toBe(0);
+    expect(cd2.transfSaldo % 30).toBe(0);
+  });
+
+  it("linha abaixo do mínimo de unidades não entra e libera o saldo", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+      linha(2, 100, { estoqueObjetivo: 200 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], minUnidadesLinha: 100 }));
+    expect(r.linhas.map((l) => l.cdDestino)).toEqual([2]);
+    expect(r.linhas[0].transfSaldo).toBe(200);
+  });
+
+  it("linha abaixo do mínimo em R$ não entra", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300, custoReposicao: 2 }),
+      linha(1, 100, { estoqueObjetivo: 50 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], minValorLinha: 500 }));
+    expect(r.linhas).toHaveLength(0); // 50 × R$ 2 = R$ 100
+  });
+
+  it("rota abaixo da carga mínima é descartada do plano", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+      linha(2, 100, { estoqueObjetivo: 5 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], minValorRota: 1000 }));
+    // CD1 leva R$ 9.000; a rota 10>2 fica em R$ 50 e sai do plano.
+    expect(r.rotas.map((x) => x.rota)).toEqual(["10>1"]);
+    expect(r.linhas).toHaveLength(1);
+    expect(r.meta.valorTransfTotal).toBe(9000);
+  });
+});
+
+describe("nivelamento por dias de cobertura", () => {
+  it("distribui proporcional ao giro quando os destinos partem da mesma cobertura", () => {
+    expect(nivelarPorCobertura([600, 300], [0, 0], [10, 5], 300)).toEqual([200, 100]);
+  });
+
+  it("enche primeiro quem está mais descoberto", () => {
+    // CD1 tem 10 dias de cobertura; CD2 está zerado. 50 un sobem o CD2 a 10 dias.
+    expect(nivelarPorCobertura([600, 300], [100, 0], [10, 5], 50)).toEqual([0, 50]);
+  });
+
+  it("respeita o limite de necessidade de cada destino", () => {
+    const r = nivelarPorCobertura([100, 300], [0, 0], [10, 5], 400);
+    expect(r[0]).toBe(100);
+    expect(r[1]).toBe(300);
+  });
+
+  it("na análise, evita que o último destino da fila fique sem nada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 300, vendaMedia3m: 150 }),
+    ];
+    const estrita = rodar(b, params({ origens: [10], destinos: [1, 2] }));
+    expect(estrita.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(300);
+    expect(estrita.linhas.find((l) => l.cdDestino === 2)).toBeUndefined();
+
+    const nivelado = rodar(b, params({ origens: [10], destinos: [1, 2], estrategiaDestino: "nivelar_cobertura" }));
+    expect(nivelado.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(200);
+    expect(nivelado.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(100);
+    // Os dois terminam com a mesma cobertura (20 dias).
+    expect(nivelado.meta.qtdTransfTotal).toBe(300);
+  });
+
+  it("nivelamento também respeita caixa fechada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 300, embCompra: 30 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 300, vendaMedia3m: 150 }),
+    ];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], estrategiaDestino: "nivelar_cobertura", arredondarCaixaFechada: true }),
+    );
+    for (const l of r.linhas) expect(l.transfTotal % 30).toBe(0);
   });
 });

@@ -65,6 +65,14 @@ export interface LinhaFaturamento {
  */
 export type ModoDemanda = "saldo_ideal" | "pedidos";
 
+/**
+ * Como o excesso é dividido quando ele não cobre todos os destinos:
+ * - "prioridade": ordem estrita — o destino 1 é atendido por inteiro antes do 2;
+ * - "nivelar_cobertura": distribui de forma a igualar os DIAS DE COBERTURA dos
+ *   destinos (water-filling), evitando que o último da fila fique em ruptura.
+ */
+export type EstrategiaDestino = "prioridade" | "nivelar_cobertura";
+
 /** Parâmetros de uma análise de rede. */
 export interface ParametrosRede {
   modoDemanda: ModoDemanda;
@@ -80,6 +88,39 @@ export interface ParametrosRede {
   limiteCoberturaDias: number; // ex.: 90
   /** Descontar as sugestões já aprovadas e ainda não faturadas. */
   considerarAprovadas: boolean;
+
+  // --- Oferta da origem ---------------------------------------------------
+  /**
+   * Somar a quantidade pendente ao excesso da origem.
+   * `true` (padrão): excesso de planejamento — conta o que ainda vai entrar.
+   * `false`: excesso FÍSICO — só o que já está no CD pode ser oferecido.
+   */
+  considerarPendenteOrigem: boolean;
+
+  // --- Necessidade do destino ---------------------------------------------
+  /**
+   * Teto de cobertura do destino, em dias (0 = sem teto). Limita a necessidade
+   * a `venda_dia × dias − (disponível + pendente + trânsito)`. Protege contra
+   * estoque objetivo inflado e contra antecipar meses de pedido.
+   */
+  coberturaMaxDestinoDias: number;
+  /**
+   * Piso de cobertura do destino, em dias (0 = sem piso). Garante a demanda
+   * mínima antirruptura mesmo quando o estoque objetivo está defasado ou zerado.
+   */
+  coberturaMinDestinoDias: number;
+  /** Como repartir o excesso entre os destinos. */
+  estrategiaDestino: EstrategiaDestino;
+
+  // --- Materialidade e logística ------------------------------------------
+  /** Transferir apenas múltiplos da embalagem de compra (caixa fechada). */
+  arredondarCaixaFechada: boolean;
+  /** Mínimo de unidades para a transferência de uma linha valer a pena. */
+  minUnidadesLinha: number;
+  /** Mínimo em R$ para a transferência de uma linha valer a pena. */
+  minValorLinha: number;
+  /** Mínimo em R$ para a ROTA inteira entrar no plano (carga mínima). */
+  minValorRota: number;
 }
 
 /** Chave de rota origem→destino. */
@@ -140,6 +181,8 @@ export interface LinhaPlano {
   demandaSaldo: number;
   transfSaldo: number;
   transfTotal: number; // unidades (meses + saldo)
+  /** Unidades que a demanda pedia e a caixa fechada não permitiu enviar. */
+  perdaCaixaFechada: number;
   valorTotal: number; // R$
   caixas: number; // transfTotal / emb (arredondado)
   qtdImediata: number; // unidades que podem sair hoje (antes da caixa fechada)
@@ -186,7 +229,9 @@ export interface ResumoOrigem {
 export interface ResumoDestino {
   cd: number;
   ordem: number; // posição na sequência de prioridade
-  necessidadeQtd: number; // demanda considerada (após trânsito aprovado)
+  /** Demanda crua da base/pedidos, antes de teto e piso de cobertura. */
+  necessidadeBrutaQtd: number;
+  necessidadeQtd: number; // demanda considerada (após trânsito, teto e piso)
   necessidadeRs: number;
   atendidoQtd: number;
   atendidoRs: number;

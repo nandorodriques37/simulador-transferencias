@@ -53,14 +53,16 @@ código — tudo vem de `ParametrosRede`.
 | # | Regra | Como o motor calcula |
 |---|---|---|
 | 1 | **Preço** | custo de reposição; se 0, preço de lista |
-| 2 | **Excesso (origem)** | `MAX(disp + pendente − venda média 3m − objetivo, 0)` |
+| 2 | **Excesso (origem)** | `MAX(disp + pendente − venda média 3m − objetivo, 0)`. Com *excesso físico* ligado, o pendente sai da conta: só o que já está no CD é oferecido |
 | 3 | **Necessidade (destino)** | modo *saldo ideal*: `MAX(objetivo − disp − pendente, 0)`; modo *pedidos*: pedido projetado por (mês × CD) |
-| 4 | **Cascata por prioridade** | `transf[i] = CLAMP(excesso − cumsum_anterior, 0, demanda[i])` — vetorizada, sem laço sequencial |
+| 3b | **Teto e piso de cobertura** | necessidade limitada a `venda_dia × dias − (disp + pendente + trânsito)`. Teto corta demanda inflada; piso garante o mínimo antirruptura. SKU sem giro no destino ignora os dois |
+| 4 | **Repartição** | *prioridade estrita* (cascata gulosa) ou *nivelar dias de cobertura* (water-filling: enche primeiro quem está mais descoberto) |
 | 5 | **Ordem dos baldes** | modo pedidos: **mês → destino** (mês 1 de todos os destinos antes do mês 2); modo saldo ideal: destino a destino |
-| 6 | **Transferência imediata** | `MIN(transf, disp − venda média × fator)`, **rateada entre os destinos na ordem**, em **caixa fechada** (`ROUNDDOWN`) |
-| 7 | **Cobertura** | `(disp + pendente) × 30 / venda média`, na visão do CD de origem |
-| 8 | **Impacto fiscal** | `valor transferido × alíquota da ROTA (origem → destino)` |
-| 9 | **Materialidade** | só entram no plano rotas × SKU com transferência > 0 |
+| 6 | **Embarque** | opção de **caixa fechada** (múltiplos da embalagem, `ROUNDDOWN`), mínimo por linha (un e R$) e **carga mínima por rota** |
+| 7 | **Transferência imediata** | `MIN(transf, disp − venda média × fator)`, **rateada entre os destinos na ordem**, em caixa fechada |
+| 8 | **Cobertura** | `(disp + pendente) × 30 / venda média`, na visão do CD de origem |
+| 9 | **Impacto fiscal** | `valor transferido × alíquota da ROTA (origem → destino)` |
+| 10 | **Materialidade** | só entram no plano rotas × SKU com transferência > 0 |
 
 **Invariantes verificados a cada análise** (`reconciliacao`):
 - nenhuma origem envia mais que o próprio excesso;
@@ -69,6 +71,24 @@ código — tudo vem de `ParametrosRede`.
 
 **Desempenho:** rede de 6 CDs × 20 mil produtos (120 mil linhas de base) em
 **menos de 1 s** — teste de performance em `lib/engine/calc.test.ts`.
+
+### Qualidade da sugestão — o que dá para ajustar
+
+Todas essas regras vêm **desligadas por padrão** (o resultado sai igual à regra
+crua da base) e ficam na tela *Nova análise*:
+
+| Regra | Para que serve | Sugestão |
+|---|---|---|
+| **Teto de cobertura (dias)** | Um estoque objetivo inflado — ou 3 meses de pedido — puxa volume demais para um CD e trava capital do outro lado. O teto converte a demanda em dias de venda. | 60–90 dias |
+| **Piso de cobertura (dias)** | Objetivo defasado ou zerado esconde uma ruptura real: sem piso, o CD em falta não aparece como destino. | 15–30 dias |
+| **Excesso físico** | O pendente ainda não chegou; sugerir a transferência dele gera ordem que o WMS não consegue executar. | ligar quando o plano for executado no curto prazo |
+| **Nivelar dias de cobertura** | Na prioridade estrita, o excesso escasso vai todo para o primeiro CD e o último fica em ruptura. O nivelamento reparte pelo giro. | usar quando os destinos têm importância parecida |
+| **Caixa fechada** | Transferência quebrada não embarca no WMS. | ligar quando a operação exige caixa fechada |
+| **Mínimo por linha / carga mínima por rota** | Cauda longa de 3 unidades e rotas de R$ 200 custam mais em frete e conferência do que o benefício. | mínimo por linha em R$ e carga mínima por rota |
+
+O dashboard mostra a **necessidade bruta → considerada** por destino sempre que
+o teto ou o piso mudou o número, e o plano exporta a coluna *não enviado por
+caixa fechada*.
 
 ```bash
 npm test
@@ -212,9 +232,34 @@ lib/export.ts          CSV/Excel do plano e ordem de transferência
 components/            Nav, UI e o seletor ordenado de CDs
 ```
 
+## ⚠️ Limites conhecidos do modelo
+
+Explícitos de propósito — o motor é guloso e determinístico, não um otimizador:
+
+1. **Sem custo de frete nem distância.** A decisão pesa benefício e ICMS; uma
+   rota longa e barata em imposto pode não compensar. Hoje isso é compensado na
+   mão pela ordem dos destinos e pela carga mínima por rota.
+2. **Sem validade (shelf life).** Nada impede mandar um lote perto do vencimento
+   para um CD de giro baixo. A base ainda não traz a data.
+3. **Lead time não entra na conta.** A coluna existe na base, mas o motor não usa
+   para decidir a partir de qual mês a transferência atende — no modo pedidos, o
+   trânsito abate sempre o mês mais próximo.
+4. **Guloso por produto, não ótimo global.** Cada SKU é resolvido isoladamente,
+   sem consolidar carga por rota nem trocar volume entre SKUs para fechar um
+   caminhão.
+5. **Sem capacidade de recebimento.** O destino aceita qualquer volume dentro da
+   necessidade; não há limite de docas, paletes ou armazenagem.
+6. **Um preço por SKU/origem.** A necessidade em R$ é valorizada pelo preço da
+   primeira origem com custo — se os CDs têm custos muito diferentes, o KPI de
+   necessidade fica aproximado (o plano, não: cada linha usa o preço da origem).
+7. **Venda média tratada como mensal.** `venda_media_3m` é lida como média
+   mensal dos 3 meses. Se a base trouxer a soma do trimestre, o excesso e a
+   cobertura saem distorcidos — divida por 3 antes de importar.
+
 ## 🔭 Próximos passos previstos
 
-Persistir as bases no Neon (staging já modelado), solver de otimização global
-como modo avançado (a cascata gulosa é o padrão), custo de frete por rota,
-restrições de capacidade e validade (shelf life), e integração direta com o ERP
-para dispensar a importação manual do faturamento.
+Persistir as bases no Neon (staging já modelado), frete por rota e consolidação
+de carga, validade (shelf life) e lead time no horizonte, capacidade de
+recebimento, solver de otimização global como modo avançado (a cascata gulosa
+segue como padrão) e integração direta com o ERP para dispensar a importação
+manual do faturamento.
