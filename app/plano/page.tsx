@@ -91,8 +91,8 @@ export default function Plano() {
         <PageHeader title="Plano de transferência" subtitle={`Análise ${data.analiseId} · ${data.label ?? ""}`} />
         <div className="card p-8 text-center">
           <p className="text-sm text-slate-600">
-            O <b>resultado</b> desta análise está salvo (KPIs e resumos aparecem no dashboard), mas o detalhe linha a
-            linha vive só durante a sessão — e esta instância está fria.
+            O plano desta análise não está disponível neste ambiente — provavelmente ele foi gerado antes de o
+            armazenamento ser configurado.
           </p>
           <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
             Recalcular usa a mesma base e os mesmos parâmetros: leva alguns segundos e devolve o plano completo para

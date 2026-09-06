@@ -38,10 +38,10 @@ export async function POST(req: NextRequest) {
     chaves?: string[];
     filtros?: Record<string, string | null>;
   };
-  const analise = store.getAnalise(body.analiseId);
-  if (!analise) return NextResponse.json({ erro: "análise não encontrada" }, { status: 404 });
+  const plano = await store.obterPlano(body.analiseId);
+  if (!plano) return NextResponse.json({ erro: "análise não encontrada" }, { status: 404 });
 
-  let linhas = analise.resultado.linhas;
+  let linhas = plano.linhas;
   if (body.chaves && body.chaves.length) {
     const set = new Set(body.chaves);
     linhas = linhas.filter((l) => set.has(`${l.rota}|${l.codigoProduto}`));
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const num = (k: string) => (f[k] ? Number(f[k]) : null);
     linhas = filtrarPlano(linhas, {
       cobertura: (f.cobertura as "total" | "acima_limite") ?? "total",
-      limiteDias: analise.parametros.limiteCoberturaDias,
+      limiteDias: plano.parametros.limiteCoberturaDias,
       cdOrigem: num("origem"),
       cdDestino: num("destino"),
       categoria: f.categoria ?? null,
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   if (linhas.length === 0) return NextResponse.json({ erro: "nenhuma linha selecionada" }, { status: 400 });
 
-  const meses = analise.resultado.meta.meses;
+  const meses = plano.meses;
   const itens: NovaSugestao[] = linhas.map((l) => ({
     cdOrigem: l.cdOrigem,
     cdDestino: l.cdDestino,
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     preco: l.precoUnitario,
     embCompra: l.embCompra,
     detalhe: {
-      modoDemanda: analise.parametros.modoDemanda,
+      modoDemanda: plano.parametros.modoDemanda,
       meses: meses.map(rotuloMes),
       transfMes: l.transfMes,
       transfSaldo: l.transfSaldo,
@@ -88,9 +88,9 @@ export async function POST(req: NextRequest) {
     },
   }));
 
-  const r = await carteira.aprovar(analise.id, itens, getUsuario(req));
+  const r = await carteira.aprovar(plano.id, itens, getUsuario(req));
   // Controle: a análise salva registra o que saiu dela para a carteira.
-  await analisesStore.registrarAprovacao(analise.id, {
+  await analisesStore.registrarAprovacao(plano.id, {
     linhas: itens.length,
     qtd: itens.reduce((a, i) => a + i.qtd, 0),
     valor: itens.reduce((a, i) => a + i.valor, 0),

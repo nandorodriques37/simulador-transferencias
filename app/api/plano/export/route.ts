@@ -8,13 +8,13 @@ export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const analise = store.getAnalise(sp.get("analiseId") ?? undefined);
-  if (!analise) return NextResponse.json({ erro: "nenhuma análise rodada ainda" }, { status: 404 });
-  const params = analise.parametros;
+  const plano = await store.obterPlano(sp.get("analiseId") ?? undefined);
+  if (!plano) return NextResponse.json({ erro: "nenhuma análise rodada ainda" }, { status: 404 });
+  const params = plano.parametros;
   const num = (k: string) => (sp.get(k) ? Number(sp.get(k)) : null);
 
   const linhas = ordenarPlano(
-    filtrarPlano(analise.resultado.linhas, {
+    filtrarPlano(plano.linhas, {
       cobertura: (sp.get("cobertura") as "total" | "acima_limite") ?? "total",
       limiteDias: params.limiteCoberturaDias,
       cdOrigem: num("origem"),
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   );
 
   const modoPedidos = params.modoDemanda === "pedidos";
-  const meses = analise.resultado.meta.meses;
+  const meses = plano.meses;
   const stamp = new Date().toISOString().slice(0, 10);
 
   if ((sp.get("format") ?? "csv") === "xlsx") {
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="plano_transferencia_${analise.id}_${stamp}.xlsx"`,
+        "Content-Disposition": `attachment; filename="plano_transferencia_${plano.id}_${stamp}.xlsx"`,
       },
     });
   }
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
   return new NextResponse(planoParaCsv(linhas, meses, modoPedidos), {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="plano_transferencia_${analise.id}_${stamp}.csv"`,
+      "Content-Disposition": `attachment; filename="plano_transferencia_${plano.id}_${stamp}.csv"`,
     },
   });
 }

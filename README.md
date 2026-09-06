@@ -232,21 +232,35 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 
 A decisão de arquitetura é simples: **o app guarda resultado, não base**.
 
+A base pesada entra, é analisada e sai. O que fica é o resultado.
+
 | Camada | O que é | Onde vive | Sobrevive a deploy/instância? |
 |---|---|---|---|
-| **Carteira** | sugestões aprovadas e baixas por faturamento | Postgres (Neon) | ✅ sempre |
-| **Resultado das análises** | parâmetros, KPIs, resumos por rota/origem/destino, o que foi aprovado | Postgres, ou o armazenamento de arquivos quando não há banco | ✅ |
-| **Insumo (base + pedidos)** | a planilha normalizada | Armazenamento de arquivos (Vercel Blob), em TSV comprimido | ✅ reconstruído em segundos |
-| **Plano linha a linha** | as ~240 mil linhas de rota × SKU | memória da instância | ❌ recalculado em um clique |
+| **Carteira** | sugestões aprovadas e baixas por faturamento | Postgres (Neon) | ✅ |
+| **Resultado das análises** | parâmetros, KPIs, resumos por rota/origem/destino, o que foi aprovado | Postgres, ou o armazenamento quando não há banco | ✅ |
+| **Plano** | as linhas origem × destino × SKU, só com o que o app usa | Armazenamento, em TSV com dicionário | ✅ |
+| **Insumo (base + pedidos)** | a planilha normalizada | Armazenamento, em TSV comprimido | ✅ |
+| Base crua de 900 mil linhas | o arquivo que você sobe | — | descartada após a importação |
 
-O plano detalhado é material de trabalho da sessão: quem opera roda a análise,
-filtra e aprova. Se a instância esfria, o **dashboard continua mostrando os KPIs
-e os resumos salvos** e a tela do Plano oferece *Recalcular* — mesma base, mesmos
-parâmetros, mesmo id de análise, alguns segundos. Nada de subir a planilha de novo.
+O ponto: **o plano é pequeno**. A base tem 900 mil linhas com dezenas de colunas;
+o plano tem as linhas que interessam, com os campos que o app de fato mostra —
+e os campos deriváveis (valor, caixas, impacto fiscal, status de cobertura) nem
+são gravados, são recalculados na leitura.
 
-Por que não persistir o plano inteiro: são ~150 MB por rodada. O que a operação
-precisa reter é o que foi **decidido** (a carteira) e o que foi **medido** (os
-KPIs) — não o rascunho que levou até lá.
+Medido na escala real — 11 CDs × 80 mil produtos:
+
+| Etapa | Tempo | Tamanho |
+|---|---|---|
+| Importar a base (880 mil linhas, CSV de 156 MB) | 18 s | insumo guardado: **7,6 MB** |
+| Rodar a análise (1 origem → 10 destinos) | 2 s (motor: 0,5 s) | 238.800 linhas de plano |
+| Guardar o plano | — | **2,2 MB** |
+| **Instância fria:** abrir o dashboard | **16 ms** | — |
+| **Instância fria:** abrir o plano completo | **948 ms** | 325 MB de RSS |
+| Filtrar de novo (já em cache) | 54 ms | — |
+
+Visualizar, filtrar, exportar e aprovar **não dependem da base**: só de rodar uma
+análise nova. Enquanto a base estava carregada, o processo usava 1,9 GB; depois
+que ela sai de cena, o app trabalha com 325 MB.
 
 ### Upload de arquivo grande
 
@@ -327,7 +341,7 @@ lib/engine/            Motor de rede (puro) + tipos + testes
 lib/data/              Esquemas, parsing, validação, leitura de planilha, seed
 lib/query/             Filtro/paginação/agregação server-side
 lib/store/             Estado da instância, carteira, resultados das análises,
-                       repositório do insumo e armazenamento (Blob/disco)
+                       plano persistido, repositório do insumo e armazenamento
 lib/export.ts          CSV/Excel do plano e ordem de transferência
 components/            Nav, UI e o seletor ordenado de CDs
 ```

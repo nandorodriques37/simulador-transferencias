@@ -49,6 +49,7 @@ interface DashResp {
   destinos: ResumoDestino[];
   tempoMs: number;
   somenteResultado?: boolean;
+  planoDisponivel?: boolean;
   aprovado?: { linhas: number; qtd: number; valor: number; em: string } | null;
   erro?: string;
   semAnalise?: boolean;
@@ -171,9 +172,12 @@ export default function Dashboard() {
       {data.somenteResultado && (
         <div className="mb-4">
           <Alert tom="info">
-            Mostrando o <b>resultado salvo</b> desta análise: KPIs e resumos por rota, origem e destino. O detalhe linha
-            a linha não é persistido — abra o <Link href="/plano" className="underline">Plano</Link> para recalculá-lo
-            em um clique, com a mesma base e os mesmos parâmetros.
+            Mostrando o <b>resultado salvo</b> desta análise — KPIs e resumos por rota, origem e destino.{" "}
+            {data.planoDisponivel ? (
+              <>O detalhe por SKU está guardado: abra o <Link href="/plano" className="underline">Plano</Link> para filtrar, exportar e aprovar.</>
+            ) : (
+              <>O detalhe por SKU não está disponível aqui — o <Link href="/plano" className="underline">Plano</Link> oferece recalculá-lo.</>
+            )}
           </Alert>
         </div>
       )}

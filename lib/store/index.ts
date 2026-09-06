@@ -3,6 +3,7 @@ import {
   Compromissos,
   compromissosVazios,
   LinhaBase,
+  LinhaPlano,
   ParametrosRede,
   PedidoProjetado,
   ResultadoRede,
@@ -13,6 +14,7 @@ import { RelatorioQualidade } from "@/lib/data/validate";
 import { carteira } from "@/lib/store/carteira";
 import { analisesStore } from "@/lib/store/analises";
 import { DatasetSalvo, repositorio } from "@/lib/store/repositorio";
+import { planosStore } from "@/lib/store/planos";
 import { agregarRotas, calcularKpis } from "@/lib/query/aggregate";
 
 /** Uma análise rodada (snapshot completo do resultado). */
@@ -338,6 +340,21 @@ export const store = {
     } catch (e) {
       console.error("[store] falha ao salvar o resultado da análise:", (e as Error).message);
     }
+
+    // Guarda também o PLANO: é o resultado operacional e cabe em ~1 MB por
+    // análise. Com ele salvo, visualizar, filtrar, exportar e aprovar deixam de
+    // depender da base e de recalcular.
+    try {
+      await planosStore.salvar(resultado.linhas, {
+        analiseId: analise.id,
+        modoDemanda: params.modoDemanda,
+        meses: resultado.meta.meses,
+        limiteCoberturaDias: params.limiteCoberturaDias,
+        linhas: resultado.linhas.length,
+      });
+    } catch (e) {
+      console.error("[store] falha ao salvar o plano:", (e as Error).message);
+    }
     return analise;
   },
 
@@ -351,6 +368,33 @@ export const store = {
     const st = getState();
     if (!id) return st.analises[st.analises.length - 1];
     return st.analises.find((a) => a.id === id);
+  },
+
+  /**
+   * Plano de uma análise, venha de onde vier: da memória desta instância ou do
+   * armazenamento. É por aqui que as telas de plano, exportação e aprovação
+   * pegam as linhas — nenhuma delas precisa da base carregada.
+   */
+  async obterPlano(analiseId?: string): Promise<
+    | { id: string; parametros: ParametrosRede; linhas: LinhaPlano[]; meses: string[]; resultado?: ResultadoRede }
+    | null
+  > {
+    const emMemoria = this.getAnalise(analiseId);
+    if (emMemoria) {
+      planosStore.cachear(emMemoria.id, emMemoria.resultado.linhas);
+      return {
+        id: emMemoria.id,
+        parametros: emMemoria.parametros,
+        linhas: emMemoria.resultado.linhas,
+        meses: emMemoria.resultado.meta.meses,
+        resultado: emMemoria.resultado,
+      };
+    }
+    const salva = analiseId ? await analisesStore.obter(analiseId) : await analisesStore.ultima();
+    if (!salva) return null;
+    const linhas = await planosStore.carregar(salva.id);
+    if (!linhas) return null;
+    return { id: salva.id, parametros: salva.parametros, linhas, meses: salva.meses };
   },
 
   getAnaliseAtual(): Analise | undefined {

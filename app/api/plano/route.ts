@@ -9,27 +9,13 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const analise = store.getAnalise(sp.get("analiseId") ?? undefined);
-  if (!analise) {
-    // O plano linha a linha é material da sessão: não é persistido. Quando a
-    // instância está fria, devolvemos os parâmetros da última análise para que
-    // a tela ofereça o recálculo em um clique (a base vem do repositório).
-    const salva = sp.get("analiseId") ? await analisesStore.obter(sp.get("analiseId")!) : await analisesStore.ultima();
-    if (!salva) return NextResponse.json({ erro: "nenhuma análise rodada ainda", semAnalise: true }, { status: 404 });
-    return NextResponse.json(
-      {
-        erro: "o detalhe por SKU desta análise não está mais em memória",
-        precisaRecalcular: true,
-        analiseId: salva.id,
-        label: salva.label,
-        criadoEm: salva.criadoEm,
-        parametros: salva.parametros,
-      },
-      { status: 409 },
-    );
-  }
-  const params = analise.parametros;
-  const todas = analise.resultado.linhas;
+  // O plano vem da memória ou do armazenamento — a tela não precisa saber.
+  const plano = await store.obterPlano(sp.get("analiseId") ?? undefined);
+  if (!plano)
+    return NextResponse.json({ erro: "nenhuma análise rodada ainda", semAnalise: true }, { status: 404 });
+
+  const params = plano.parametros;
+  const todas = plano.linhas;
   const num = (k: string) => (sp.get(k) ? Number(sp.get(k)) : null);
 
   const filtradas = filtrarPlano(todas, {
@@ -56,8 +42,8 @@ export async function GET(req: NextRequest) {
   // Marca as linhas que já estão na carteira desta análise.
   const aprovadas = new Set(
     (await carteira.listar({ status: "todas", limite: 5000 }))
-      .filter((s) => s.analiseId === analise.id && s.status !== "cancelada")
-      .map((s) => `${s.cdOrigem}>${s.cdDestino}|${s.codigoProduto}`),
+      .filter((x) => x.analiseId === plano.id && x.status !== "cancelada")
+      .map((x) => `${x.cdOrigem}>${x.cdDestino}|${x.codigoProduto}`),
   );
 
   const totaisFiltro = filtradas.reduce(
@@ -72,9 +58,9 @@ export async function GET(req: NextRequest) {
   );
 
   return NextResponse.json({
-    analiseId: analise.id,
+    analiseId: plano.id,
     modoDemanda: params.modoDemanda,
-    meses: analise.resultado.meta.meses,
+    meses: plano.meses,
     facets: extrairFacets(todas),
     totaisFiltro,
     total: pagina.total,
