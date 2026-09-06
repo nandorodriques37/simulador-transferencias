@@ -81,9 +81,38 @@ const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toSt
 // Singleton por instância (sobrevive a HMR e a múltiplas rotas na mesma lambda).
 const g = globalThis as unknown as { __transfStore?: EstadoStore };
 
+/**
+ * Em produção o estado começa VAZIO, nunca com a base de demonstração.
+ *
+ * O motivo é de segurança de dados: como o estado vive na memória da instância,
+ * uma requisição pode cair numa instância nova que nunca viu a importação. Se
+ * ela respondesse com a base sintética, o usuário veria números plausíveis e
+ * falsos. Vazio é honesto — a tela pede a importação.
+ *
+ * Para avaliar o app com dados de exemplo em produção, defina `DEMO_DATA=1`.
+ */
+function usarDemo(): boolean {
+  if (process.env.DEMO_DATA === "1") return true;
+  if (process.env.DEMO_DATA === "0") return false;
+  return process.env.NODE_ENV !== "production";
+}
+
 function bootstrap(): EstadoStore {
-  const demo = gerarBaseDemo();
   const parametros = parametrosPadrao();
+  if (!usarDemo()) {
+    return {
+      base: [],
+      pedidos: [],
+      fonteBase: "",
+      fontePedidos: "",
+      importedEm: "",
+      parametros,
+      analises: [],
+      importLog: [],
+      seq: 0,
+    };
+  }
+  const demo = gerarBaseDemo();
   return {
     base: demo.base,
     pedidos: demo.pedidos,
@@ -130,6 +159,9 @@ export const store = {
     const st = getState();
     const cds = cdsDaBase(st.base);
     return {
+      /** `false` quando ainda não há base nesta instância (pede importação). */
+      pronto: st.base.length > 0,
+      demo: usarDemo() && st.importLog.length === 0,
       baseLinhas: st.base.length,
       pedidosLinhas: st.pedidos.length,
       produtos: new Set(st.base.map((l) => l.codigoProduto)).size,

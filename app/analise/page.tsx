@@ -52,6 +52,7 @@ interface Parametros {
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { baseLinhas: number; pedidosLinhas: number; cdsBase: number[]; achados: Achado[]; ok: boolean }
 interface Dataset {
+  pronto: boolean; demo: boolean;
   baseLinhas: number; pedidosLinhas: number; produtos: number; cds: number[];
   fonteBase: string; fontePedidos: string; importedEm: string; mesesPedidos: string[];
 }
@@ -190,6 +191,24 @@ export default function NovaAnalise() {
       />
 
       {msg && <div className="mb-4"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+
+      {!dataset.pronto && (
+        <div className="mb-4">
+          <Alert tom="warn">
+            <b>Sem base carregada nesta instância.</b> Importe a base de CDs abaixo para rodar a análise. O estado da
+            base vive na memória do servidor: depois de um período ocioso ou de um novo deploy, a importação precisa
+            ser refeita.
+          </Alert>
+        </div>
+      )}
+      {dataset.pronto && dataset.demo && (
+        <div className="mb-4">
+          <Alert tom="info">
+            Você está vendo a <b>base de demonstração</b> (dados sintéticos). Importe as suas planilhas para trabalhar
+            com dados reais.
+          </Alert>
+        </div>
+      )}
 
       {/* --------------------- Chaves gerais das restrições -------------------- */}
       <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3">

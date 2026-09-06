@@ -74,6 +74,11 @@ export default function Dashboard() {
         <PageHeader title="Dashboard executivo" subtitle="Resultado da última análise de rede." />
         <div className="card p-8 text-center">
           <p className="text-sm text-slate-600">Nenhuma análise rodada ainda nesta instância.</p>
+          <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
+            A base e o resultado ficam na memória do servidor. Depois de um novo deploy — ou de um período ocioso —
+            é preciso importar a base e rodar a análise de novo. A carteira de sugestões aprovadas, essa sim, é
+            persistida no banco.
+          </p>
           <Link href="/analise" className="btn-primary mt-4 inline-flex">Configurar e rodar a primeira análise</Link>
         </div>
       </div>
