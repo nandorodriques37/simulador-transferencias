@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsuario } from "@/lib/auth";
+import { store } from "@/lib/store";
 import { lerPlanilha } from "@/lib/data/planilha";
 import { parseFaturamento } from "@/lib/data/parse";
 import { carteira } from "@/lib/store/carteira";
@@ -10,7 +11,7 @@ export const maxDuration = 60;
 
 /** Histórico de baixas por faturamento. */
 export async function GET() {
-  return NextResponse.json({ eventos: await carteira.eventos(), resumo: await carteira.resumo() });
+  return NextResponse.json({ eventos: await carteira.eventos(), resumo: await carteira.resumo(store.getDataset().dataPosicao) });
 }
 
 /**
@@ -55,6 +56,10 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const relatorio = await carteira.baixarFaturamento(linhas, getUsuario(req), file.name);
-  return NextResponse.json({ ok: true, relatorio, diag, resumo: await carteira.resumo() });
+  // Impressão digital do conteúdo: barra a reimportação do mesmo arquivo.
+  const { createHash } = await import("node:crypto");
+  const impressao = createHash("sha256").update(Buffer.from(await file.arrayBuffer())).digest("hex").slice(0, 32);
+  const relatorio = await carteira.baixarFaturamento(linhas, getUsuario(req), file.name, impressao);
+  if (!relatorio.ok) return NextResponse.json({ erro: relatorio.achados[0]?.mensagem, relatorio }, { status: 409 });
+  return NextResponse.json({ ok: true, relatorio, diag, resumo: await carteira.resumo(store.getDataset().dataPosicao) });
 }

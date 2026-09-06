@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
 import { lerPlanilha } from "@/lib/data/planilha";
+import { normalizarDataFaturamento } from "@/lib/store/carteira";
 import { parseBase, parsePedidos } from "@/lib/data/parse";
 import { validarImportacao } from "@/lib/data/validate";
 import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
@@ -29,10 +30,12 @@ export async function POST(req: NextRequest) {
   let baseFile: File | null = null;
   let pedidosFile: File | null = null;
   let dryRun = false;
+  let dataPosicao = "";
 
   if (req.headers.get("content-type")?.includes("application/json")) {
-    const body = (await req.json()) as { baseUrl?: string; pedidosUrl?: string; dryRun?: boolean };
+    const body = (await req.json()) as { baseUrl?: string; pedidosUrl?: string; dryRun?: boolean; dataPosicao?: string };
     dryRun = body.dryRun === true;
+    dataPosicao = body.dataPosicao ?? "";
     try {
       if (body.baseUrl) baseFile = await baixar(body.baseUrl, "base.csv");
       if (body.pedidosUrl) pedidosFile = await baixar(body.pedidosUrl, "pedidos.csv");
@@ -44,6 +47,7 @@ export async function POST(req: NextRequest) {
     baseFile = form.get("base") as File | null;
     pedidosFile = form.get("pedidos") as File | null;
     dryRun = form.get("dryRun") === "true";
+    dataPosicao = (form.get("dataPosicao") as string | null) ?? "";
   }
 
   if (!baseFile && !pedidosFile)
@@ -84,6 +88,9 @@ export async function POST(req: NextRequest) {
   if (!relatorio.ok)
     return NextResponse.json({ erro: "importação bloqueada por erros de validação", relatorio }, { status: 422 });
 
+  // Data da posição de estoque: informada pelo usuário ou o momento do envio.
+  // É a referência que evita contar duas vezes uma transferência já faturada.
+  const iso = normalizarDataFaturamento(dataPosicao) ?? new Date().toISOString();
   const log = await store.setDataset(
     base,
     pedidos,
@@ -91,6 +98,7 @@ export async function POST(req: NextRequest) {
     pedidosFile?.name ?? "",
     getUsuario(req),
     relatorio,
+    iso,
   );
   return NextResponse.json({ ok: true, log, dataset: store.getDataset(), parametros: store.getParametros(), relatorio });
 }

@@ -15,7 +15,7 @@ export async function GET() {
   await store.ensureBase();
   const base = store.getBase();
   const pedidos = store.getPedidos();
-  const compromissos = await carteira.compromissos();
+  const compromissos = await carteira.compromissos(store.getDataset().dataPosicao);
 
   const map = new Map<
     number,

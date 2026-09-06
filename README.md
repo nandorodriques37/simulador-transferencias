@@ -155,6 +155,9 @@ latin1 é detectado automaticamente.
 
 ### 1. Base de CDs — origem **e** destino (obrigatória)
 
+> Na importação, informe a **data da posição de estoque** — é ela que evita
+> contar duas vezes (ou deixar de contar) uma transferência já faturada.
+
 | Coluna | Campo | Obrigatória |
 |---|---|---|
 | CD / Depósito | `cd` | ✅ |
@@ -186,7 +189,49 @@ aprovada. Linhas sem sugestão correspondente são listadas, e não alteram nada
 
 ---
 
-## 🔄 O ciclo entre análises
+## 🔁 O ciclo periódico — nada se perde, nada duplica
+
+Você sobe a base a cada rodada. Entre uma rodada e outra, transferências são
+aprovadas, faturadas (ou não), e a base muda. Duas invariantes sustentam isso:
+
+**1. A data da posição de estoque decide o que já está refletido.**
+
+Ao importar, você informa **quando a base foi extraída** (não quando está
+subindo). O app compara essa data com a data de cada faturamento:
+
+| Situação da sugestão | A base reflete? | O app… |
+|---|---|---|
+| Aprovada, não faturada | não — o estoque não saiu | desconta da origem, trata como trânsito no destino |
+| Faturada **antes** da data da base | sim — a base já mostra a saída | não desconta (contar de novo seria descontar duas vezes) |
+| Faturada **depois** da data da base | não — a base é anterior | continua descontando até a próxima base chegar |
+
+É esse terceiro caso que evita o pior erro possível: importar uma base extraída
+antes do faturamento e o app **sugerir de novo** o que já saiu do CD.
+
+**2. Aprovar duas vezes a mesma rota + produto não soma volume inexistente.**
+
+- Análise que **considerou** a carteira: o número que ela sugere já é o
+  incremento — as aprovações somam, como devem.
+- Análise que **ignorou** a carteira (chave *considerar aprovadas* desligada):
+  o número é o total bruto. Somar duplicaria, então o app grava só a diferença
+  — ou ignora a linha — e avisa exatamente o que fez.
+
+Nenhum dos dois casos exige disciplina do operador: a trava é do app.
+
+**Outras proteções do ciclo:**
+
+- **O mesmo arquivo de faturamento importado duas vezes é recusado** (impressão
+  digital do conteúdo), e uma NF já lançada naquela rota + produto não baixa de
+  novo, mesmo vindo em outro arquivo.
+- Cada baixa guarda **quantidade, data e documento** — o histórico permite
+  reconstruir a conciliação, não só o saldo.
+- **Envelhecimento:** sugestões em aberto há mais de 30 dias aparecem em
+  destaque. Enquanto estão lá, reservam estoque; se a transferência não vai
+  acontecer, cancelar devolve o volume à próxima análise.
+- O armazenamento **limpa o que sai da janela** (datasets e planos antigos), em
+  vez de crescer para sempre.
+
+## 🔄 Como uma sugestão caminha
 
 ```
  análise → aprova linha → SUGESTÃO EM ABERTO ──(desconta origem e destino)──┐

@@ -146,7 +146,11 @@ export default function Plano() {
       const r = await fetch("/api/carteira", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) { setMsg({ tom: "erro", texto: `Erro: ${d.erro}` }); return; }
-      setMsg({ tom: "good", texto: `${fmtInt(d.gravadas)} linha(s) na carteira. Elas já descontam origem e destino na próxima análise.` });
+      const extra = (d.avisos ?? []).length ? ` ${(d.avisos as string[]).join(" · ")}` : "";
+      setMsg({
+        tom: (d.ignoradas ?? 0) > 0 || (d.conciliadas ?? 0) > 0 ? "erro" : "good",
+        texto: `${fmtInt(d.gravadas)} linha(s) na carteira. Elas já descontam origem e destino na próxima análise.${extra}`,
+      });
       setSel(new Set());
       carregar();
     } finally {

@@ -20,7 +20,7 @@ export async function GET() {
     },
     armazenamento: { backend: backend(), uploadDireto: !!process.env.BLOB_READ_WRITE_TOKEN },
     parametros: store.getParametros(),
-    carteira: { ...(await carteira.resumo()), durable: carteira.durable() },
+    carteira: { ...(await carteira.resumo(store.getDataset().dataPosicao)), durable: carteira.durable() },
     analiseAtual: analise
       ? {
           id: analise.id,

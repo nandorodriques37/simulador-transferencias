@@ -19,7 +19,8 @@ export async function GET(req: NextRequest) {
   });
   return NextResponse.json({
     itens,
-    resumo: await carteira.resumo(),
+    dataPosicao: store.getDataset().dataPosicao,
+    resumo: await carteira.resumo(store.getDataset().dataPosicao),
     durable: carteira.durable(),
     eventos: await carteira.eventos(),
   });
@@ -88,14 +89,16 @@ export async function POST(req: NextRequest) {
     },
   }));
 
-  const r = await carteira.aprovar(plano.id, itens, getUsuario(req));
+  const r = await carteira.aprovar(plano.id, itens, getUsuario(req), {
+    consideraAprovadas: plano.parametros.considerarAprovadas !== false,
+  });
   // Controle: a análise salva registra o que saiu dela para a carteira.
   await analisesStore.registrarAprovacao(plano.id, {
-    linhas: itens.length,
+    linhas: r.gravadas,
     qtd: itens.reduce((a, i) => a + i.qtd, 0),
     valor: itens.reduce((a, i) => a + i.valor, 0),
   });
-  return NextResponse.json({ ...r, resumo: await carteira.resumo() });
+  return NextResponse.json({ ...r, resumo: await carteira.resumo(store.getDataset().dataPosicao) });
 }
 
 /** Cancela sugestões (voltam a liberar excesso e necessidade). */
@@ -104,5 +107,5 @@ export async function DELETE(req: NextRequest) {
   if (!Array.isArray(body.ids) || body.ids.length === 0)
     return NextResponse.json({ erro: "informe os ids" }, { status: 400 });
   const n = await carteira.cancelar(body.ids, getUsuario(req));
-  return NextResponse.json({ canceladas: n, resumo: await carteira.resumo() });
+  return NextResponse.json({ canceladas: n, resumo: await carteira.resumo(store.getDataset().dataPosicao) });
 }

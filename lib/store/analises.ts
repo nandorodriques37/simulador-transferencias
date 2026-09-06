@@ -1,7 +1,7 @@
 import { ParametrosRede, Reconciliacao, ResumoDestino, ResumoOrigem, ResumoRota } from "@/lib/engine/types";
 import { Kpis } from "@/lib/query/aggregate";
 import { dbEnabled, getPool } from "@/lib/store/db";
-import { armazenamentoDuravel, guardar, recuperar } from "@/lib/store/armazenamento";
+import { armazenamentoDuravel, guardar, recuperar, remover } from "@/lib/store/armazenamento";
 
 /**
  * RESULTADO DAS ANÁLISES — o que o app guarda de verdade.
@@ -69,6 +69,13 @@ async function salvarNoArmazenamento(a: AnaliseSalva): Promise<void> {
   const idx = await indiceArquivo();
   const novo = [a.id, ...idx.filter((x) => x !== a.id)].slice(0, MAX_GUARDADAS);
   await guardar(CHAVE_INDICE, JSON.stringify(novo));
+
+  // Análise que saiu da janela leva junto o plano dela.
+  for (const velho of idx) {
+    if (novo.includes(velho)) continue;
+    await remover(`analise/${velho}.json`);
+    await remover(`plano/${velho}.tsv`);
+  }
 }
 
 async function lerDoArmazenamento(id: string): Promise<AnaliseSalva | null> {

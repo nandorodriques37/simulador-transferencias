@@ -4,15 +4,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Badge, Kpi, Modal, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
 import { fmtInt, fmtRs, fmtRsCompacto } from "@/lib/format";
 
+interface Baixa { qtd: number; em: string; registradoEm: string; documento?: string }
 interface Sugestao {
-  id: string; analiseId: string; criadoEm: string; criadoPor: string;
+  id: string; analiseId: string; criadoEm: string; criadoPor: string; baixas?: Baixa[];
   cdOrigem: number; cdDestino: number; codigoProduto: number; produto: string;
   qtd: number; valor: number; preco: number; embCompra: number;
   status: "aprovada" | "faturada" | "cancelada"; qtdFaturada: number; faturadoEm: string | null;
 }
 interface Evento { id: string; em: string; por: string; arquivo: string; linhas: number; casadas: number; semCorrespondencia: number; qtdBaixada: number }
-interface Resumo { aprovadas: number; qtdAberta: number; valorAberto: number; faturadas: number; qtdFaturada: number }
-interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; eventos: Evento[] }
+interface Resumo {
+  aprovadas: number; qtdAberta: number; valorAberto: number; faturadas: number; qtdFaturada: number;
+  qtdNaoRefletida: number; valorNaoRefletido: number; envelhecidas: number; diasMaisAntiga: number;
+}
+interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; eventos: Evento[]; dataPosicao?: string }
 interface Achado { nivel: "erro" | "aviso" | "info"; mensagem: string; qtd: number; exemplos?: string[] }
 
 const nivelTom = { erro: "erro", aviso: "warn", info: "info" } as const;
@@ -47,6 +51,7 @@ export default function Carteira() {
 
   const { itens, resumo, eventos } = data;
   const aberto = (s: Sugestao) => (s.status === "aprovada" ? Math.max(s.qtd - s.qtdFaturada, 0) : 0);
+  const dias = (s: Sugestao) => Math.floor((Date.now() - new Date(s.criadoEm).getTime()) / 86400000);
 
   const cancelar = async () => {
     if (sel.size === 0) return;
@@ -115,11 +120,38 @@ export default function Carteira() {
         </div>
       )}
 
+      {resumo.envelhecidas > 0 && (
+        <div className="mb-3">
+          <Alert tom="warn">
+            <b>{fmtInt(resumo.envelhecidas)} sugestão(ões) em aberto há mais de 30 dias</b> (a mais antiga tem{" "}
+            {fmtInt(resumo.diasMaisAntiga)} dias). Enquanto estiverem aqui, elas seguem reservando estoque na origem e
+            reduzindo a necessidade do destino em toda análise. Se a transferência não vai acontecer, cancele — o
+            volume volta a ficar disponível.
+          </Alert>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi titulo="Sugestões em aberto" valor={fmtInt(resumo.aprovadas)} sub="aprovadas e ainda não faturadas" tom="brand" />
         <Kpi titulo="Volume comprometido" valor={fmtInt(resumo.qtdAberta)} sub="unidades reservadas na origem" tom="azul" />
-        <Kpi titulo="Valor em aberto" valor={fmtRsCompacto(resumo.valorAberto)} sub="capital em trânsito planejado" />
+        <Kpi
+          titulo="A base atual não reflete"
+          valor={fmtInt(resumo.qtdNaoRefletida)}
+          sub={`${fmtRsCompacto(resumo.valorNaoRefletido)} · é o que a próxima análise desconta`}
+          tom="warn"
+        />
         <Kpi titulo="Já faturadas" valor={fmtInt(resumo.faturadas)} sub={`${fmtInt(resumo.qtdFaturada)} un confirmadas`} tom="good" />
+      </div>
+
+      <div className="mt-3">
+        <Alert tom="info">
+          <b>Como o app evita duplicar:</b> uma transferência faturada <i>antes</i> da data da base já aparece nos
+          números importados e sai da conta; faturada <i>depois</i>, ela continua descontando até a próxima base
+          chegar. Por isso a <b>data da posição de estoque</b> informada na importação é o dado que sustenta o ciclo.
+          {data.dataPosicao && (
+            <> Base atual: posição de <b>{new Date(data.dataPosicao).toLocaleDateString("pt-BR")}</b>.</>
+          )}
+        </Alert>
       </div>
 
       <div className="mt-4">
@@ -159,6 +191,7 @@ export default function Carteira() {
                   <th className="thc">Status</th>
                   <th className="thc">Análise</th>
                   <th className="thc">Aprovado em</th>
+                  <th className="thc text-right">Dias</th>
                 </tr>
               </thead>
               <tbody>
@@ -190,10 +223,13 @@ export default function Carteira() {
                     </td>
                     <td className="tdc text-slate-500">{s.analiseId}</td>
                     <td className="tdc text-slate-500">{new Date(s.criadoEm).toLocaleDateString("pt-BR")}</td>
+                    <td className={`tdc num ${dias(s) >= 30 && s.status === "aprovada" ? "font-semibold text-amber-600" : "text-slate-400"}`}>
+                      {s.status === "aprovada" ? fmtInt(dias(s)) : "—"}
+                    </td>
                   </tr>
                 ))}
                 {itens.length === 0 && (
-                  <tr><td colSpan={11} className="td text-center text-slate-400">Nenhuma sugestão nesta visão. Aprove linhas no Plano de transferência.</td></tr>
+                  <tr><td colSpan={12} className="td text-center text-slate-400">Nenhuma sugestão nesta visão. Aprove linhas no Plano de transferência.</td></tr>
                 )}
               </tbody>
             </table>

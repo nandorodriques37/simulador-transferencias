@@ -50,6 +50,8 @@ interface EstadoStore {
   importedEm: string;
   /** Dataset carregado nesta instância (vindo do repositório). */
   datasetId: string;
+  /** Data de referência da posição de estoque da base carregada. */
+  dataPosicao: string;
   parametros: ParametrosRede;
   analises: Analise[];
   importLog: ImportLogItem[];
@@ -121,6 +123,7 @@ function bootstrap(): EstadoStore {
       fontePedidos: "",
       importedEm: "",
       datasetId: "",
+      dataPosicao: "",
       parametros,
       analises: [],
       importLog: [],
@@ -135,6 +138,7 @@ function bootstrap(): EstadoStore {
     fontePedidos: "Pedidos de demonstração (sintéticos)",
     importedEm: nowIso(),
     datasetId: "",
+    dataPosicao: nowIso(),
     parametros: ajustarParametrosAosCds(parametros, demo.cds),
     analises: [],
     importLog: [],
@@ -185,6 +189,7 @@ export const store = {
       fonteBase: st.fonteBase,
       fontePedidos: st.fontePedidos,
       importedEm: st.importedEm,
+      dataPosicao: st.dataPosicao,
       mesesPedidos: Array.from(new Set(st.pedidos.map((p) => p.anoMes))).sort(),
     };
   },
@@ -216,6 +221,7 @@ export const store = {
     st.fontePedidos = atual.fontePedidos;
     st.importedEm = atual.criadoEm;
     st.datasetId = atual.id;
+    st.dataPosicao = atual.dataPosicao || atual.criadoEm;
     st.parametros = ajustarParametrosAosCds(st.parametros, atual.cds);
     return true;
   },
@@ -232,6 +238,7 @@ export const store = {
     fontePedidos: string,
     por: string,
     relatorio: RelatorioQualidade,
+    dataPosicao?: string,
   ): Promise<ImportLogItem> {
     const st = getState();
     if (base) {
@@ -243,6 +250,7 @@ export const store = {
       st.fontePedidos = fontePedidos;
     }
     st.importedEm = nowIso();
+    st.dataPosicao = dataPosicao || nowIso();
     const cds = cdsDaBase(st.base);
     st.parametros = ajustarParametrosAosCds(st.parametros, cds);
 
@@ -252,6 +260,7 @@ export const store = {
         criadoPor: por,
         fonteBase: st.fonteBase,
         fontePedidos: st.fontePedidos,
+        dataPosicao: st.dataPosicao,
       });
       st.datasetId = salvo.id;
     } catch (e) {
@@ -293,7 +302,7 @@ export const store = {
     const st = getState();
     st.parametros = params;
     const compromissos: Compromissos = params.considerarAprovadas
-      ? await carteira.compromissos()
+      ? await carteira.compromissos(st.dataPosicao)
       : compromissosVazios();
     const idx = indexarPedidos(st.pedidos);
     const resultado = calcularRede(st.base, idx, params, compromissos);

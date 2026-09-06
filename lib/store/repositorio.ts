@@ -1,5 +1,5 @@
 import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
-import { armazenamentoDuravel, guardar, recuperar } from "./armazenamento";
+import { armazenamentoDuravel, guardar, recuperar, remover } from "./armazenamento";
 
 /**
  * REPOSITÓRIO DO INSUMO — guarda a base normalizada fora da memória.
@@ -16,6 +16,13 @@ import { armazenamentoDuravel, guardar, recuperar } from "./armazenamento";
 export interface DatasetSalvo {
   id: string;
   criadoEm: string;
+  /**
+   * Data de referência da POSIÇÃO DE ESTOQUE — quando a base foi extraída.
+   * É ela que decide se uma transferência já faturada aparece ou não nos
+   * números importados; sem isso não há como evitar contar duas vezes (ou
+   * deixar de contar) uma movimentação.
+   */
+  dataPosicao: string;
   criadoPor: string;
   fonteBase: string;
   fontePedidos: string;
@@ -144,7 +151,7 @@ export const repositorio = {
   async salvar(
     base: LinhaBase[],
     pedidos: PedidoProjetado[],
-    meta: { criadoPor: string; fonteBase: string; fontePedidos: string },
+    meta: { criadoPor: string; fonteBase: string; fontePedidos: string; dataPosicao?: string },
   ): Promise<DatasetSalvo> {
     const id = uid();
     const rb = await guardar(`dataset/${id}/base.tsv`, serializarBase(base));
@@ -152,6 +159,7 @@ export const repositorio = {
     const salvo: DatasetSalvo = {
       id,
       criadoEm: new Date().toISOString(),
+      dataPosicao: meta.dataPosicao || new Date().toISOString(),
       criadoPor: meta.criadoPor,
       fonteBase: meta.fonteBase,
       fontePedidos: meta.fontePedidos,
@@ -161,8 +169,17 @@ export const repositorio = {
       mesesPedidos: Array.from(new Set(pedidos.map((p) => p.anoMes))).sort(),
       bytes: rb.bytes + rp.bytes,
     };
-    const lista = [salvo, ...(await this.listar())].slice(0, MAX_DATASETS);
+    const anterior = await this.listar();
+    const lista = [salvo, ...anterior].slice(0, MAX_DATASETS);
     await guardar(CHAVE_CATALOGO, JSON.stringify(lista));
+
+    // Apaga o que saiu da janela: sem isso o armazenamento só cresce.
+    const mantidos = new Set(lista.map((d) => d.id));
+    for (const velho of anterior) {
+      if (mantidos.has(velho.id)) continue;
+      await remover(`dataset/${velho.id}/base.tsv`);
+      await remover(`dataset/${velho.id}/pedidos.tsv`);
+    }
     return salvo;
   },
 

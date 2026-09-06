@@ -52,7 +52,7 @@ interface Parametros {
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { baseLinhas: number; pedidosLinhas: number; cdsBase: number[]; achados: Achado[]; ok: boolean }
 interface Dataset {
-  pronto: boolean; demo: boolean; duravel: boolean; salvoEm: string;
+  pronto: boolean; demo: boolean; duravel: boolean; salvoEm: string; dataPosicao: string;
   baseLinhas: number; pedidosLinhas: number; produtos: number; cds: number[];
   fonteBase: string; fontePedidos: string; importedEm: string; mesesPedidos: string[];
 }
@@ -70,6 +70,7 @@ export default function NovaAnalise() {
   const [rodando, setRodando] = useState(false);
   const [limitarRota, setLimitarRota] = useState(false);
   const [uploadDireto, setUploadDireto] = useState(false);
+  const [dataPosicao, setDataPosicao] = useState("");
   const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
 
   // Importação
@@ -164,13 +165,14 @@ export default function NovaAnalise() {
       r = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseUrl, pedidosUrl, dryRun }),
+        body: JSON.stringify({ baseUrl, pedidosUrl, dryRun, dataPosicao }),
       });
     } else {
       const fd = new FormData();
       if (baseFile) fd.append("base", baseFile);
       if (pedFile) fd.append("pedidos", pedFile);
       fd.append("dryRun", String(dryRun));
+      fd.append("dataPosicao", dataPosicao);
       r = await fetch("/api/import", { method: "POST", body: fd });
     }
     setProgresso(90);
@@ -282,6 +284,11 @@ export default function NovaAnalise() {
               <div className="text-right text-xs text-slate-500">
                 <div>{fmtInt(dataset.baseLinhas)} linhas · {fmtInt(dataset.produtos)} produtos · {dataset.cds.length} CDs</div>
                 <div>{fmtInt(dataset.pedidosLinhas)} linhas de pedido</div>
+                {dataset.dataPosicao && (
+                  <div className="mt-0.5">
+                    posição de {new Date(dataset.dataPosicao).toLocaleDateString("pt-BR")}
+                  </div>
+                )}
                 <div className="mt-1 flex justify-end gap-1">
                   <Badge tom={uploadDireto ? "good" : "warn"}>
                     {uploadDireto ? "Upload direto (arquivo grande)" : "Upload pela API (até 4,5 MB)"}
@@ -309,6 +316,23 @@ export default function NovaAnalise() {
                   Colunas: ano-mês · CD destino · código do produto · pedido. Fonte atual: <b>{dataset.fontePedidos || "—"}</b>
                 </p>
               </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-slate-100 pt-3">
+              <label className="block">
+                <span className="label block">Data da posição de estoque</span>
+                <input
+                  type="date"
+                  value={dataPosicao}
+                  onChange={(e) => setDataPosicao(e.target.value)}
+                  className="input mt-0.5 py-1.5 text-xs"
+                />
+              </label>
+              <p className="max-w-lg pb-1.5 text-[11px] text-slate-500">
+                <b>Quando a base foi extraída</b> — não quando você está subindo. É essa data que diz ao app se uma
+                transferência já faturada aparece ou não nos números: sem ela, ou o volume é descontado duas vezes,
+                ou a mesma transferência é sugerida de novo. Em branco = agora.
+              </p>
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
