@@ -1,6 +1,5 @@
-import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
-import { CD_ORIGEM_PADRAO } from "./defaults";
-import { ColSpec, normKey, SCHEMA_OBJETIVO, SCHEMA_PEDIDOS, SCHEMA_POSICAO } from "./schema";
+import { LinhaBase, LinhaFaturamento, PedidoProjetado } from "@/lib/engine/types";
+import { ColSpec, normKey, SCHEMA_BASE, SCHEMA_FATURAMENTO, SCHEMA_PEDIDOS } from "./schema";
 
 export interface ErroLinha {
   linha: number; // linha aproximada na planilha (cabeçalho = 1)
@@ -13,7 +12,7 @@ export interface ErroLinha {
 export interface DiagParse {
   header: string[];
   mapeadas: { campo: string; rotulo: string; coluna: string }[];
-  faltando: { campo: string; rotulo: string; aliases: string[] }[]; // requeridas não encontradas
+  faltando: { campo: string; rotulo: string; aliases: string[] }[]; // requeridas ausentes
   ignoradas: string[]; // colunas do arquivo sem uso
   totalLinhas: number;
   linhasValidas: number;
@@ -49,7 +48,10 @@ function mapearColunas(header: string[], schema: ColSpec[]): ColMap[] {
     let coluna: string | null = null;
     for (const a of spec.aliases) {
       const orig = normToOrig.get(normKey(a));
-      if (orig) { coluna = orig; break; }
+      if (orig) {
+        coluna = orig;
+        break;
+      }
     }
     return { spec, coluna };
   });
@@ -73,7 +75,6 @@ export function parseComEsquema(
   const errosLinha: ErroLinha[] = [];
   let errosTruncados = 0;
 
-  // Sem colunas requeridas não faz sentido processar linhas.
   if (faltando.length === 0) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -91,7 +92,8 @@ export function parseComEsquema(
         if (n === null) {
           if (spec.required) {
             linhaErro = true;
-            if (errosLinha.length < MAX_ERROS) errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor não numérico em coluna obrigatória "${coluna}"` });
+            if (errosLinha.length < MAX_ERROS)
+              errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor não numérico em coluna obrigatória "${coluna}"` });
             else errosTruncados++;
           }
           obj[spec.campo] = 0;
@@ -99,14 +101,14 @@ export function parseComEsquema(
         }
         if (spec.naoNegativo && n < 0) {
           linhaErro = true;
-          if (errosLinha.length < MAX_ERROS) errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor negativo não permitido em "${coluna}" (${n})` });
+          if (errosLinha.length < MAX_ERROS)
+            errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor negativo não permitido em "${coluna}" (${n})` });
           else errosTruncados++;
         }
         obj[spec.campo] = spec.tipo === "int" ? Math.round(n) : n;
       }
-      // Linha só entra se tiver as chaves obrigatórias preenchidas (evita
-      // linhas em branco no fim do arquivo). Chaves opcionais (ex.: deposito)
-      // não bloqueiam.
+      // Linha só entra com as chaves obrigatórias preenchidas (descarta as
+      // linhas em branco no fim do arquivo).
       const temChave = cols
         .filter((c) => c.spec.chave && c.spec.required)
         .every((c) => {
@@ -132,14 +134,15 @@ export function parseComEsquema(
   };
 }
 
-export function parsePosicao(rows: Record<string, unknown>[]): { itens: PosicaoEstoque[]; diag: DiagParse } {
-  const { itens, diag } = parseComEsquema(rows, SCHEMA_POSICAO);
-  const out: PosicaoEstoque[] = itens.map((o) => {
+/** Base única de CDs — cada linha é (CD × produto). */
+export function parseBase(rows: Record<string, unknown>[]): { itens: LinhaBase[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(rows, SCHEMA_BASE);
+  const out: LinhaBase[] = itens.map((o) => {
+    const cd = Number(o.cd);
     const codigo = Number(o.codigoProduto);
-    const deposito = Number(o.deposito) || CD_ORIGEM_PADRAO;
     return {
-      idSku: `${deposito}-${codigo}`, // CALCULADO (era fórmula ID na planilha)
-      deposito,
+      idSku: `${cd}-${codigo}`, // CALCULADO (era a fórmula ID na planilha)
+      cd,
       codigoProduto: codigo,
       produto: str(o.produto),
       estoqueDisponivel: Number(o.estoqueDisponivel) || 0,
@@ -165,27 +168,36 @@ export function parsePosicao(rows: Record<string, unknown>[]): { itens: PosicaoE
   return { itens: out, diag };
 }
 
+/** Normaliza o ano-mês para 'AAAA_MM' (aceita 2026-07, 07/2026, 202607…). */
+export function normalizarAnoMes(v: string): string {
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})[_\-/.]?(\d{1,2})$/);
+  if (m) return `${m[1]}_${m[2].padStart(2, "0")}`;
+  m = s.match(/^(\d{1,2})[_\-/.](\d{4})$/);
+  if (m) return `${m[2]}_${m[1].padStart(2, "0")}`;
+  return s;
+}
+
 export function parsePedidos(rows: Record<string, unknown>[]): { itens: PedidoProjetado[]; diag: DiagParse } {
   const { itens, diag } = parseComEsquema(rows, SCHEMA_PEDIDOS);
   const out: PedidoProjetado[] = itens.map((o) => ({
-    anoMes: str(o.anoMes),
+    anoMes: normalizarAnoMes(str(o.anoMes)),
     cdDestino: Number(o.cdDestino),
     codigoProduto: Number(o.codigoProduto),
     pedido: Number(o.pedido) || 0,
-    estoqueAtual: Number(o.estoqueAtual) || 0,
-    estoqueProjetado: Number(o.estoqueProjetado) || 0,
-    eo: Number(o.eo) || 0,
   }));
   return { itens: out, diag };
 }
 
-export function parseObjetivos(rows: Record<string, unknown>[]): { itens: ObjetivoDestino[]; diag: DiagParse } {
-  const { itens, diag } = parseComEsquema(rows, SCHEMA_OBJETIVO);
-  const out: ObjetivoDestino[] = itens.map((o) => ({
+export function parseFaturamento(rows: Record<string, unknown>[]): { itens: LinhaFaturamento[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(rows, SCHEMA_FATURAMENTO);
+  const out: LinhaFaturamento[] = itens.map((o) => ({
+    cdOrigem: Number(o.cdOrigem),
     cdDestino: Number(o.cdDestino),
     codigoProduto: Number(o.codigoProduto),
-    descricao: str(o.descricao),
-    saldoEstoqueObjetivo: Number(o.saldoEstoqueObjetivo) || 0,
+    quantidade: Number(o.quantidade) || 0,
+    documento: str(o.documento),
+    data: str(o.data),
   }));
   return { itens: out, diag };
 }

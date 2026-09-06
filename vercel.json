@@ -2,10 +2,16 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "functions": {
-    "app/api/calc/route.ts": {
+    "app/api/analise/route.ts": {
       "maxDuration": 60
     },
     "app/api/import/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/faturamento/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/plano/export/route.ts": {
       "maxDuration": 60
     }
   }

@@ -1,11 +1,12 @@
 /**
- * Aplica o esquema (lib/store/schema.sql) no Vercel Postgres.
+ * Aplica o esquema (lib/store/schema.sql) no Vercel Postgres/Neon.
  * Uso: defina POSTGRES_URL no ambiente e rode `npm run seed:pg`.
  *
- * A aplicação funciona sem banco (store em memória, modo demo). Este script é
- * o primeiro passo para ativar persistência real: cria as tabelas versionadas.
- * O adaptador de leitura/escrita (lib/store/postgres.ts) deve implementar a
- * mesma interface exportada em lib/store/index.ts.
+ * O app funciona sem banco (modo demo, tudo em memória). Com banco, a CARTEIRA
+ * de transferências (sugestões aprovadas + baixas por faturamento) passa a ser
+ * durável — é o estado que precisa atravessar análises. As tabelas da carteira
+ * também são criadas sob demanda por lib/store/carteira.ts; este script cria o
+ * esquema completo, incluindo as tabelas de staging das bases.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

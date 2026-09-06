@@ -1,31 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
-import { agregarResumo, calcularKpis } from "@/lib/query/aggregate";
+import { agregarPorDestino, agregarPorOrigem, agregarRotas, calcularKpis } from "@/lib/query/aggregate";
 import { filtrarPlano } from "@/lib/query/plano";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const versionId = sp.get("versionId") ?? undefined;
-  const cobertura = (sp.get("cobertura") as "total" | "acima90") ?? "total";
-  const versao = store.getVersao(versionId);
-  if (!versao) return NextResponse.json({ erro: "versão não encontrada" }, { status: 404 });
+  const analise = store.getAnalise(sp.get("analiseId") ?? undefined);
+  if (!analise)
+    return NextResponse.json({ erro: "nenhuma análise rodada ainda", semAnalise: true }, { status: 404 });
 
-  const params = versao.parametros;
-  const todas = versao.resultado.linhas;
-  const linhas = filtrarPlano(todas, { cobertura, limiteDias: params.limiteCoberturaDias });
-  const resumo = agregarResumo(linhas, params);
-  const kpis = calcularKpis(linhas, resumo, params, versao.resultado.meta.excessoSimplesRs, versao.resultado.meta.excessoTotalRs);
+  const cobertura = (sp.get("cobertura") as "total" | "acima_limite") ?? "total";
+  const params = analise.parametros;
+  const linhas = filtrarPlano(analise.resultado.linhas, {
+    cobertura,
+    limiteDias: params.limiteCoberturaDias,
+  });
+  const rotas = agregarRotas(linhas, params);
+  const kpis = calcularKpis(linhas, rotas, {
+    excessoDisponivelRs: analise.resultado.meta.excessoDisponivelRs,
+    necessidadeTotalRs: analise.resultado.meta.necessidadeTotalRs,
+  });
 
   return NextResponse.json({
-    versao: { id: versao.id, label: versao.label, criadoEm: versao.criadoEm, criadoPor: versao.criadoPor },
+    analise: {
+      id: analise.id,
+      label: analise.label,
+      criadoEm: analise.criadoEm,
+      criadoPor: analise.criadoPor,
+      fonteBase: analise.fonteBase,
+      fontePedidos: analise.fontePedidos,
+    },
     cobertura,
-    modelo: params.modelo ?? "drp",
-    meses: params.horizonteMeses,
-    prioridadeCds: params.prioridadeCds,
+    modoDemanda: params.modoDemanda,
+    meses: analise.resultado.meta.meses,
+    sequenciaOrigens: params.origens,
+    sequenciaDestinos: params.destinos,
+    consideraAprovadas: params.considerarAprovadas,
     kpis,
-    resumo,
-    tempoMs: versao.resultado.meta.tempoMs,
+    rotas,
+    origens: agregarPorOrigem(linhas, analise.resultado.origens),
+    destinos: agregarPorDestino(linhas, analise.resultado.destinos),
+    tempoMs: analise.resultado.meta.tempoMs,
   });
 }

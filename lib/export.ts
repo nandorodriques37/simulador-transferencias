@@ -1,77 +1,80 @@
-import { LinhaPlano, qtdTotalLinha, valorTotalLinha } from "@/lib/engine/types";
+import { LinhaPlano } from "@/lib/engine/types";
 import { rotuloMes } from "@/lib/data/defaults";
+import { Sugestao } from "@/lib/store/carteira";
 
 const dec = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const int = (n: number) => n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 
 /**
- * Colunas do plano (base de acompanhamento). A estrutura é a MESMA nos dois
- * modelos: as colunas mês a mês permanecem — no modelo "estoque objetivo" elas
- * saem ZERADAS — e há a nova coluna "Transferir p/ Atender Estoque Objetivo".
+ * Colunas do plano de rede. A linha é a ROTA (CD origem → CD destino) × SKU.
+ * No modo "pedidos" há as colunas mês a mês; no modo "saldo ideal" há a coluna
+ * única de necessidade/transferência.
  */
-export function colunasPlano(meses: string[]): string[] {
+export function colunasPlano(meses: string[], modoPedidos: boolean): string[] {
   const rot = meses.map(rotuloMes);
   return [
-    "CD",
-    "Deposito",
+    "CD Origem",
+    "CD Destino",
+    "Rota",
     "CodsemDv",
     "Produto",
     "Fornecedor",
     "Comprador",
     "Analista",
     "Categoria N1",
-    ...rot.map((m) => `Pedido ${m}`),
-    ...rot.map((m) => `Transf. ${m}`),
-    "Transferir p/ Atender Estoque Objetivo (un)",
+    ...(modoPedidos ? rot.map((m) => `Pedido ${m}`) : ["Necessidade destino (un)"]),
+    ...(modoPedidos ? rot.map((m) => `Transf. ${m}`) : ["Transferir (un)"]),
+    "Qtd Total (un)",
     "Preço Unitário",
-    ...rot.map((m) => `Valor Transf. ${m}`),
-    "Valor Transf. Estoque Objetivo",
-    "Qtd Transf. Imediata",
-    "Valor Transf. Imediata",
+    "Valor Total (R$)",
     "Emb. Compra (un/cx)",
+    "Qtd Total (cx)",
+    "Qtd Transf. Imediata",
     "Transf. Imediata (cx)",
-    "Qtd Transf Unidade Arredond",
-    ...rot.map((m) => `Transf. ${m} (cx)`),
-    "Transf. Estoque Objetivo (cx)",
-    "Cobertura (dias)",
-    "Status Cobertura (>90d)",
+    "Qtd Imediata Arredondada",
+    "Valor Transf. Imediata",
+    "Cobertura origem (dias)",
+    "Status Cobertura",
+    "Alíquota da rota (%)",
+    "Impacto fiscal (R$)",
   ];
 }
 
-export function linhaParaArray(l: LinhaPlano): (string | number)[] {
+export function linhaParaArray(l: LinhaPlano, modoPedidos: boolean): (string | number)[] {
   return [
+    `CD ${l.cdOrigem}`,
     `CD ${l.cdDestino}`,
-    l.deposito,
+    l.rota,
     l.codigoProduto,
     l.produto,
     l.fornecedor,
     l.comprador,
     l.analista,
     l.categoriaN1,
-    ...l.pedidoMes,
-    ...l.transfMes,
-    l.transfObjetivo,
+    ...(modoPedidos ? l.demandaMes : [l.demandaSaldo]),
+    ...(modoPedidos ? l.transfMes : [l.transfSaldo]),
+    l.transfTotal,
     l.precoUnitario,
-    ...l.valorTransfMes,
-    l.valorTransfObjetivo,
-    l.qtdTransfImediata,
-    l.valorTransfImediata,
+    l.valorTotal,
     l.embCompra,
+    l.caixas,
+    l.qtdImediata,
     l.imediataCaixas,
     l.qtdImediataArredondada,
-    ...l.transfCaixasMes,
-    l.transfObjetivoCaixas,
+    l.valorImediata,
     Math.round(l.coberturaDias),
     l.statusCobertura,
+    Math.round(l.aliquota * 1000000) / 10000, // em %
+    l.impactoFiscal,
   ];
 }
 
 /** CSV pt-BR (separador ';', decimais com vírgula) — abre direto no Excel BR. */
-export function planoParaCsv(linhas: LinhaPlano[], meses: string[]): string {
-  const header = colunasPlano(meses);
+export function planoParaCsv(linhas: LinhaPlano[], meses: string[], modoPedidos: boolean): string {
+  const header = colunasPlano(meses, modoPedidos);
   const linhasCsv = [header.join(";")];
   for (const l of linhas) {
-    const arr = linhaParaArray(l).map((v) => {
+    const arr = linhaParaArray(l, modoPedidos).map((v) => {
       if (typeof v === "number") return Number.isInteger(v) ? String(v) : dec(v);
       return `"${String(v).replace(/"/g, '""')}"`;
     });
@@ -80,30 +83,51 @@ export function planoParaCsv(linhas: LinhaPlano[], meses: string[]): string {
   return "﻿" + linhasCsv.join("\r\n");
 }
 
-/** Ordem de transferência para ERP/WMS (linhas aprovadas). */
-export function ordemTransferenciaCsv(linhas: LinhaPlano[], meses: string[], aprovador: string, versionId: string): string {
-  const header = ["Ordem", "Origem", "Destino", "Codigo Produto", "Produto", "Qtd Transferir (un)", "Qtd (caixas)", "Emb (un/cx)", "Valor (R$)", "Aprovado Por", "Versao", "Gerado Em"];
+/** Ordem de transferência para ERP/WMS a partir da carteira aprovada. */
+export function ordemTransferenciaCsv(sugestoes: Sugestao[], solicitante: string): string {
+  const header = [
+    "Ordem",
+    "Origem",
+    "Destino",
+    "Codigo Produto",
+    "Produto",
+    "Qtd Aprovada (un)",
+    "Qtd Ja Faturada (un)",
+    "Qtd Em Aberto (un)",
+    "Qtd (caixas)",
+    "Emb (un/cx)",
+    "Valor Em Aberto (R$)",
+    "Analise",
+    "Aprovado Por",
+    "Aprovado Em",
+    "Gerado Por",
+    "Gerado Em",
+  ];
   const emissao = new Date().toISOString();
   const rows = [header.join(";")];
-  linhas.forEach((l, i) => {
-    // Total transferido = meses + estoque objetivo (funciona nos dois modelos).
-    const qtd = qtdTotalLinha(l);
-    const caixas = l.transfCaixasMes.reduce((a, b) => a + b, 0) + l.transfObjetivoCaixas;
-    const valor = valorTotalLinha(l);
-    rows.push([
-      `OT-${versionId}-${String(i + 1).padStart(5, "0")}`,
-      `CD ${l.deposito}`,
-      `CD ${l.cdDestino}`,
-      l.codigoProduto,
-      `"${l.produto.replace(/"/g, '""')}"`,
-      int(qtd),
-      int(caixas),
-      l.embCompra,
-      dec(valor),
-      aprovador,
-      versionId,
-      emissao,
-    ].join(";"));
+  sugestoes.forEach((s, i) => {
+    const aberto = Math.max(s.qtd - s.qtdFaturada, 0);
+    const caixas = s.embCompra > 0 ? Math.floor(aberto / s.embCompra) : 0;
+    rows.push(
+      [
+        `OT-${s.analiseId}-${String(i + 1).padStart(5, "0")}`,
+        `CD ${s.cdOrigem}`,
+        `CD ${s.cdDestino}`,
+        s.codigoProduto,
+        `"${(s.produto ?? "").replace(/"/g, '""')}"`,
+        int(s.qtd),
+        int(s.qtdFaturada),
+        int(aberto),
+        int(caixas),
+        s.embCompra,
+        dec(aberto * s.preco),
+        s.analiseId,
+        s.criadoPor,
+        s.criadoEm,
+        solicitante,
+        emissao,
+      ].join(";"),
+    );
   });
   return "﻿" + rows.join("\r\n");
 }

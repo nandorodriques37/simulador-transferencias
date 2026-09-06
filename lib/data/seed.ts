@@ -1,5 +1,5 @@
-import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
-import { CD_ORIGEM_PADRAO, horizontePadrao } from "./defaults";
+import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
+import { CDS_DEMO, horizontePadrao } from "./defaults";
 
 // Gerador determinístico (mulberry32) — mesma semente, mesma base de demonstração.
 function rng(seed: number) {
@@ -26,85 +26,81 @@ const CATS: [string, string, string, string][] = [
 const FORNECEDORES = ["BALDACCI", "EUROFARMA", "MEDLEY", "EMS", "ACHE", "NEO QUIMICA", "SANOFI", "BAYER", "GSK", "HYPERA"];
 const COMPRADORES = ["LUIZ AUGUSTO", "MARIA CLARA", "ROBERTO DIAS", "FERNANDA LUZ", "PAULO SERGIO"];
 const ANALISTAS = ["AMANDA SILVA", "BRUNO COSTA", "CARLA MENDES", "DIEGO ROCHA", "ELISA NUNES"];
-const PRODUTOS = ["FLAC", "COMP", "CAPS", "SOL", "SUSP", "GEL", "POM", "COL", "XPE", "SACHE"];
+const FORMAS = ["FLAC", "COMP", "CAPS", "SOL", "SUSP", "GEL", "POM", "COL", "XPE", "SACHE"];
 
 export interface BaseDemo {
-  posicao: PosicaoEstoque[];
+  base: LinhaBase[];
   pedidos: PedidoProjetado[];
-  objetivos: ObjetivoDestino[];
+  cds: number[];
 }
 
 /**
- * Base sintética de demonstração. Aproxima o perfil da base real (excesso
- * concentrado, mistura de giro, preços variados) sem versionar dados reais.
+ * Base sintética de demonstração no formato NOVO: uma única base com todos os
+ * CDs empilhados (cada CD é ao mesmo tempo candidato a origem e a destino).
+ * Aproxima o perfil da base real — excesso concentrado em alguns CDs, falta em
+ * outros, mistura de giro e de preços — sem versionar dados reais.
  */
-export function gerarBaseDemo(nSkus = 4000, seed = 42): BaseDemo {
-  const r = rng(seed);
+export function gerarBaseDemo(nProdutos = 900, cds: number[] = CDS_DEMO): BaseDemo {
+  const r = rng(20260906);
   const meses = horizontePadrao();
-  // Rede com 11 CDs: origem 10 + 10 destinos possíveis (1..9 e 11).
-  const cds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11];
-  const posicao: PosicaoEstoque[] = [];
+  const base: LinhaBase[] = [];
   const pedidos: PedidoProjetado[] = [];
-  const objetivos: ObjetivoDestino[] = [];
 
-  for (let i = 0; i < nSkus; i++) {
-    const codigo = 1000 + i;
+  // Perfil de cada CD: quanto ele tende a ter de sobra (>1) ou de falta (<1).
+  const perfil = new Map<number, number>();
+  cds.forEach((cd, i) => perfil.set(cd, i === 0 ? 2.2 : 0.35 + 0.25 * ((i - 1) % 4)));
+
+  for (let i = 0; i < nProdutos; i++) {
+    const codigo = 3000 + i * 7;
     const cat = CATS[Math.floor(r() * CATS.length)];
-    const vmed = Math.round(r() * r() * 300); // muitos itens de baixo giro
-    const objetivo = Math.round(vmed * (0.5 + r() * 2));
-    // ~65% dos SKUs com excesso
-    const temExcesso = r() < 0.65;
-    const disp = temExcesso
-      ? objetivo + Math.round(vmed * (1 + r() * 6)) + Math.round(r() * 400)
-      : Math.round(objetivo * r());
-    const pend = Math.round(r() * vmed * 0.5);
-    const custo = r() < 0.08 ? 0 : Math.round((2 + r() * 300) * 100) / 100; // ~8% com custo 0
-    const lista = Math.round((custo || 5 + r() * 300) * (1.1 + r() * 0.6) * 100) / 100;
-    const emb = r() < 0.05 ? 0 : [1, 1, 10, 12, 20, 24, 30, 60][Math.floor(r() * 8)];
+    const nome = `${cat[3].slice(0, 8)} ${10 + Math.floor(r() * 900)}MG ${FORMAS[Math.floor(r() * FORMAS.length)]}`;
+    const custo = Math.round((2 + r() * 180) * 100) / 100;
+    const emb = [1, 6, 12, 24, 50][Math.floor(r() * 5)];
+    const fornecedor = FORNECEDORES[Math.floor(r() * FORNECEDORES.length)];
+    const comprador = COMPRADORES[Math.floor(r() * COMPRADORES.length)];
+    const analista = ANALISTAS[Math.floor(r() * ANALISTAS.length)];
 
-    posicao.push({
-      idSku: `${CD_ORIGEM_PADRAO}-${codigo}`,
-      deposito: CD_ORIGEM_PADRAO,
-      codigoProduto: codigo,
-      produto: `${cat[3].split(" ")[0]} ${PRODUTOS[Math.floor(r() * PRODUTOS.length)]}/${[1, 12, 20, 30, 60][Math.floor(r() * 5)]}`,
-      estoqueDisponivel: disp,
-      estoqueObjetivo: objetivo,
-      quantidadePendente: pend,
-      vendaMedia3m: vmed,
-      custoReposicao: custo,
-      precoLista: lista,
-      embCompra: emb,
-      fornecedor: FORNECEDORES[Math.floor(r() * FORNECEDORES.length)],
-      comprador: COMPRADORES[Math.floor(r() * COMPRADORES.length)],
-      analista: ANALISTAS[Math.floor(r() * ANALISTAS.length)],
-      categoriaN1: cat[0],
-      categoriaN2: cat[1],
-      categoriaN3: cat[2],
-      categoriaN4: cat[3],
-      flagAme: r() < 0.1 ? "AME" : "NÃO AME",
-      monitorado: r() < 0.15 ? "S" : "N",
-      marcaPropria: r() < 0.2 ? "S" : "N",
-      leadTime: Math.round(15 + r() * 60),
-    });
+    for (const cd of cds) {
+      const fator = perfil.get(cd)!;
+      const venda = Math.round(r() * 900 * (cd === cds[0] ? 1.4 : 1));
+      const objetivo = Math.round(venda * (1.1 + r() * 0.8));
+      const disponivel = Math.max(0, Math.round(objetivo * fator * (0.5 + r())));
+      const pendente = r() < 0.25 ? Math.round(objetivo * r() * 0.4) : 0;
 
-    // Pedidos projetados: nem todo SKU tem pedido em todo CD/mês.
-    for (const m of meses) {
-      for (const cd of cds) {
-        if (r() < 0.35) {
-          const p = Math.round(r() * Math.max(vmed, 20) * (0.5 + r()));
-          if (p > 0) pedidos.push({ anoMes: m, cdDestino: cd, codigoProduto: codigo, pedido: p });
+      base.push({
+        idSku: `${cd}-${codigo}`,
+        cd,
+        codigoProduto: codigo,
+        produto: nome,
+        estoqueDisponivel: disponivel,
+        estoqueObjetivo: objetivo,
+        quantidadePendente: pendente,
+        vendaMedia3m: venda,
+        custoReposicao: r() < 0.08 ? 0 : custo,
+        precoLista: Math.round(custo * 1.35 * 100) / 100,
+        embCompra: emb,
+        fornecedor,
+        comprador,
+        analista,
+        categoriaN1: cat[0],
+        categoriaN2: cat[1],
+        categoriaN3: cat[2],
+        categoriaN4: cat[3],
+        flagAme: r() < 0.15 ? "AME" : "",
+        monitorado: r() < 0.1 ? "SIM" : "NAO",
+        marcaPropria: cat[1] === "GENERICOS" && r() < 0.3 ? "SIM" : "NAO",
+        leadTime: 7 + Math.floor(r() * 25),
+      });
+
+      // Pedidos projetados só para os CDs que tendem a comprar (perfil < 1).
+      if (fator < 1) {
+        for (const m of meses) {
+          const q = Math.round(venda * (0.6 + r() * 0.9));
+          if (q > 0) pedidos.push({ anoMes: m, cdDestino: cd, codigoProduto: codigo, pedido: q });
         }
       }
     }
-
-    // Estoque objetivo por CD (MODELO 2): saldo objetivo simples por (cd, produto).
-    // Nem todo SKU precisa de objetivo em todo CD.
-    for (const cd of cds) {
-      if (r() < 0.4) {
-        const saldo = Math.round(r() * Math.max(vmed, 15) * (0.8 + r() * 2));
-        if (saldo > 0) objetivos.push({ cdDestino: cd, codigoProduto: codigo, descricao: `${cat[3].split(" ")[0]} ${PRODUTOS[Math.floor(r() * PRODUTOS.length)]}`, saldoEstoqueObjetivo: saldo });
-      }
-    }
   }
-  return { posicao, pedidos, objetivos };
+
+  return { base, pedidos, cds: [...cds] };
 }

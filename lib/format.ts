@@ -27,12 +27,20 @@ export function rotuloMes(anoMes: string): string {
   return `${nomes[mes] ?? mes}/${ano?.slice(2) ?? ""}`;
 }
 
-// Paleta Pague Menos — azul e vermelho institucionais em destaque
-export const CD_CORES: Record<number, string> = {
-  1: "#0000be",
-  9: "#16a34a",
-  2: "#f59e0b",
-  8: "#ff2342",
-  7: "#7c3aed",
-};
-export const corCd = (cd: number) => CD_CORES[cd] ?? "#64748b";
+// Paleta da rede — cores estáveis por CD (Pague Menos em destaque nos 2 primeiros)
+const PALETA = [
+  "#0000be", "#ff2342", "#16a34a", "#f59e0b", "#7c3aed",
+  "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4f46e5", "#0f766e",
+];
+
+/** Cor determinística por CD (mesmo CD, mesma cor em todas as telas). */
+export function corCd(cd: number): string {
+  const i = Math.abs(Math.floor(cd)) % PALETA.length;
+  return PALETA[i];
+}
+
+/** Rótulo curto de rota: "CD10 → CD1". */
+export function rotuloRota(rota: string): string {
+  const [o, d] = rota.split(">");
+  return `CD${o} → CD${d}`;
+}

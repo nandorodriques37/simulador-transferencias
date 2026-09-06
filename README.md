@@ -1,75 +1,74 @@
-# Otimização de Transferências entre CDs
+# Transferências entre CDs — análise de rede
 
-Aplicativo web que substitui a planilha Excel usada para planejar transferências
-de **excesso de estoque do CD10** para os CDs **1, 9, 2, 8 e 7** — liberando
-capital de giro e mostrando o **impacto fiscal (ICMS)** de cada rota ao lado do
-benefício.
+Aplicativo web que planeja transferências de estoque **entre todos os CDs da
+rede**: cada CD pode ser **origem** (pelo que sobra) e **destino** (pelo que
+falta), na sequência que o planejador escolher — mostrando o benefício e o
+**impacto fiscal (ICMS) por rota** ao lado.
 
-O app tem **dois modelos de transferência** (modelo **híbrido**), escolhidos com
-um clique em *Parâmetros*:
-
-- **DRP (pedidos):** abate os **pedidos de compra projetados (DRP)** dos próximos
-  meses, cascateando o excesso por (mês × CD) na ordem de prioridade.
-- **Estoque objetivo:** envia o excesso para **atender o saldo de estoque
-  objetivo de cada CD** — sem quebra mensal. Recebe uma planilha simples
-  (`CD destino · produto · descrição · saldo de estoque objetivo`) e distribui
-  tudo o que sobra no CD de origem até cobrir o objetivo de cada destino, na
-  ordem de prioridade.
-
-A **base de acompanhamento é a mesma** nos dois modelos: as colunas mês a mês
-permanecem (saem **zeradas** no modelo Estoque Objetivo) e há a coluna adicional
-**"Transferir p/ Atender Estoque Objetivo"**.
-
-Construído em **Next.js (App Router) + TypeScript**, pronto para deploy no
-**Vercel**, com persistência em **Vercel Postgres** (modo demo em memória por
-padrão). O motor de cálculo é **puro, vetorizado e testado**, e foi **validado
-ao centavo contra a planilha original**.
+> **Mudança de conceito (v2).** Antes eram três bases e uma origem fixa (CD10 →
+> demais CDs). Agora são **duas bases** e a rede inteira em uma análise só.
 
 ---
 
-## ✅ Validação do motor (contra a base real)
+## 🧠 O conceito em uma tela
 
-O motor TypeScript foi executado contra a base real da planilha
-(`Transferencias_Saindo_CD10b.xlsb`): **79.313 SKUs / 130.608 células de pedido**.
-Reproduziu **exatamente** os totais da aba `RESUMO` e gerou **8.926 linhas de
-plano em ~250 ms**:
+```
+      BASE ÚNICA DE CDs                    BASE DE PEDIDOS (opcional)
+  (todos os CDs empilhados)                 ano_mês · CD · produto
+   ↓ o que sobra    ↓ o que falta                    ↓
+   EXCESSO           NECESSIDADE  ←—— modo "saldo ideal" ou "pedidos"
 
-| Métrica | Planilha (RESUMO) | Motor TS |
-|---|---|---|
-| Transferido Jul / Ago / Set | 27.437.557,41 / 9.648.297,85 / 5.607.118,90 | ✅ idêntico |
-| Total transferido | R$ 42.692.974,16 | ✅ |
-| Transferência imediata | R$ 20.071.632,03 (861.396 un) | ✅ |
-| Impacto fiscal total | R$ 851.307,68 | ✅ |
-| Linhas do plano | ~8.900 | 8.926 |
+   Sequência de ORIGENS      →     Ordem de DESTINOS
+   CD10 → CD9 → CD8                CD1 → CD2 → CD7 → CD8
+     │                                │
+     └── cada origem, na sua vez, olha TODOS os destinos na ordem
+```
 
-Os agregados de referência ficam em `lib/engine/reference-totals.ts`. Nenhum
-dado de SKU/preço individual é versionado no repositório.
+1. **Uma base só, com todos os CDs.** Mesmo layout da antiga base de origem —
+   agora com todos os depósitos empilhados. Dela saem as duas pontas:
+   - **excesso** (o CD como origem): `disponível + pendente − venda média 3m − estoque objetivo`
+   - **falta** (o CD como destino): `estoque objetivo − disponível − pendente`
+2. **Uma base de pedidos.** Você escolhe, por análise, o que o destino precisa:
+   - **Só o saldo ideal** → a falta calculada acima (não usa a base de pedidos);
+   - **Consumir os pedidos futuros** → os pedidos projetados mês a mês (DRP puro).
+3. **Você define as duas sequências.** Primeiro a ordem das **origens** (quem
+   escoa primeiro), depois a ordem dos **destinos** (quem é atendido primeiro).
+   A demanda é um **saldo compartilhado**: o que a origem 1 atende some da fila
+   da origem 2 — por isso a ordem muda o resultado.
+4. **Aprovou, ficou valendo.** A linha aprovada vira uma **sugestão em carteira**
+   e passa a descontar o excesso da origem e a entrar como trânsito no destino
+   nas próximas análises — até você **importar a base de faturamento**, que dá
+   baixa nela (a partir daí as bases atualizadas já refletem a movimentação).
+
+Um CD pode estar nas duas listas. A única regra absoluta: **nenhum CD transfere
+para si mesmo**.
 
 ---
 
 ## 🧮 Motor de cálculo (`lib/engine/`)
 
-Regras implementadas exatamente como na planilha (nenhum número hardcoded — tudo
-vem de `Parametros`):
+Puro, sem estado e testado (35 casos). Nenhum número de negócio é fixado em
+código — tudo vem de `ParametrosRede`.
 
-1. **Preço** = custo de reposição; se 0, preço de lista.
-2. **Excesso transferível** = `MAX(disp + pendente − venda_média − objetivo, 0)`.
-3. **Demanda** por (mês × CD) via `lookup` indexado (um join, não 15 XLOOKUPs).
-4. **Cascata por prioridade vetorizada** (cumsum-clamp, sem laço sequencial):
-   `transf_i = CLAMP(excesso − cumsum_anterior, 0, pedido_i)`.
-5. Valores em R$, **transferência imediata** (fator de segurança), **caixas**
-   (arredondamento logístico), **cobertura** e **impacto fiscal** por CD.
-6. Só entram no plano linhas `cd × sku` com transferência total > 0.
+| # | Regra | Como o motor calcula |
+|---|---|---|
+| 1 | **Preço** | custo de reposição; se 0, preço de lista |
+| 2 | **Excesso (origem)** | `MAX(disp + pendente − venda média 3m − objetivo, 0)` |
+| 3 | **Necessidade (destino)** | modo *saldo ideal*: `MAX(objetivo − disp − pendente, 0)`; modo *pedidos*: pedido projetado por (mês × CD) |
+| 4 | **Cascata por prioridade** | `transf[i] = CLAMP(excesso − cumsum_anterior, 0, demanda[i])` — vetorizada, sem laço sequencial |
+| 5 | **Ordem dos baldes** | modo pedidos: **mês → destino** (mês 1 de todos os destinos antes do mês 2); modo saldo ideal: destino a destino |
+| 6 | **Transferência imediata** | `MIN(transf, disp − venda média × fator)`, **rateada entre os destinos na ordem**, em **caixa fechada** (`ROUNDDOWN`) |
+| 7 | **Cobertura** | `(disp + pendente) × 30 / venda média`, na visão do CD de origem |
+| 8 | **Impacto fiscal** | `valor transferido × alíquota da ROTA (origem → destino)` |
+| 9 | **Materialidade** | só entram no plano rotas × SKU com transferência > 0 |
 
-**Requisitos não-funcionais atendidos:**
-- Recálculo completo **< 10 s** (na prática ~250 ms para 80k SKUs — ver teste de
-  performance em `lib/engine/calc.test.ts`).
-- **Invariante de reconciliação** por SKU: `soma(transf) + sobra = excesso`.
-- **Versionamento**: toda mudança de parâmetro/base gera **nova versão de
-  cálculo** (snapshot) — o histórico nunca é sobrescrito.
+**Invariantes verificados a cada análise** (`reconciliacao`):
+- nenhuma origem envia mais que o próprio excesso;
+- nenhum destino recebe mais que a própria necessidade;
+- nenhuma auto-transferência (origem = destino).
 
-Rodar os testes (23 casos, incluindo bordas: preço 0, venda 0, emb 0, SKU sem
-pedido, excesso < 1º pedido, sobra integral no mês 3, e o teste de performance):
+**Desempenho:** rede de 6 CDs × 20 mil produtos (120 mil linhas de base) em
+**menos de 1 s** — teste de performance em `lib/engine/calc.test.ts`.
 
 ```bash
 npm test
@@ -77,56 +76,80 @@ npm test
 
 ---
 
-## 🔀 Modelo híbrido (DRP × Estoque objetivo)
+## 📄 As duas bases (e a terceira, do faturamento)
 
-O motor é **um só** e a cascata gulosa (`cascataCumsum`) é idêntica nos dois
-modelos — muda apenas **de onde vêm os baldes de demanda** (`params.modelo`):
+A base anexada **não precisa de nenhuma coluna de fórmula**: o app lê só as
+colunas cruas e recalcula tudo (mapa em `CAMPOS_CALCULADOS`, `lib/data/schema.ts`).
+Os cabeçalhos aceitam variações e formato pt-BR (`1.234,56`); CSV em UTF-8 ou
+latin1 é detectado automaticamente.
 
-| | **DRP (pedidos)** | **Estoque objetivo** |
+### 1. Base de CDs — origem **e** destino (obrigatória)
+
+| Coluna | Campo | Obrigatória |
 |---|---|---|
-| Fonte de demanda | Pedidos projetados (mês × CD) | Saldo de estoque objetivo (por CD) |
-| Baldes da cascata | `nMeses × nCDs` | `nCDs` (um por CD) |
-| Quebra mensal | sim | não (meses saem **zerados**) |
-| Coluna resultado | `Transf. <mês>` | `Transferir p/ Atender Estoque Objetivo` |
-| Planilha extra | PEDIDOS PROJETADOS | `CD destino · produto · descrição · saldo objetivo` |
+| CD / Depósito | `cd` | ✅ |
+| Código do produto (`CodsemDv`) | `codigoProduto` | ✅ |
+| Estoque disponível | `estoqueDisponivel` | ✅ |
+| Estoque objetivo | `estoqueObjetivo` | ✅ |
+| Venda média 3 meses | `vendaMedia3m` | ✅ |
+| Quantidade pendente | `quantidadePendente` | — |
+| Custo de reposição / Preço de lista | `custoReposicao` / `precoLista` | — |
+| Embalagem de compra | `embCompra` | — |
+| Fornecedor · comprador · analista · categorias N1–N4 | — | — |
 
-O **excesso transferível** (REGRA 2), o **preço** (REGRA 1), a **transferência
-imediata** (fator de segurança + caixa fechada), a **cobertura** e o **impacto
-fiscal** funcionam igual nos dois modelos. No modelo Estoque Objetivo a
-transferência imediata considera o objetivo inteiro (é, por natureza, imediato),
-e o impacto fiscal usa o valor transferido para atender o objetivo.
+> Uma linha por **(CD, produto)**. Chave repetida bloqueia a importação.
 
-A **nova planilha** do modelo 2 tem colunas simples (esquema em
-`SCHEMA_OBJETIVO`, aceita variações de cabeçalho e formato pt-BR):
+### 2. Base de pedidos (usada no modo *pedidos*)
 
-| Coluna | Campo interno | Obrigatória |
-|---|---|---|
-| CD destino | `cdDestino` | ✅ |
-| Produto (código) | `codigoProduto` | ✅ |
-| Descrição | `descricao` | — |
-| Saldo de estoque objetivo | `saldoEstoqueObjetivo` | ✅ |
+`ano_mês` (aceita `2026_07`, `2026-07`, `07/2026`) · `CD destino` ·
+`código do produto` · `pedido`.
 
-Escolha o modelo em *Parâmetros* (seletor no topo do editor) e envie a planilha
-correspondente na área de importação. Toda troca de modelo/base gera **nova
-versão de cálculo** (o histórico nunca é sobrescrito).
+### 3. Base de faturamento (importada na tela **Carteira**)
+
+`CD origem` · `CD destino` · `código do produto` · `quantidade faturada` ·
+(opcional) documento/NF e data. O casamento é por **rota + produto**, na ordem
+de aprovação, com baixa parcial quando a quantidade faturada é menor que a
+aprovada. Linhas sem sugestão correspondente são listadas, e não alteram nada.
+
+---
+
+## 🔄 O ciclo entre análises
+
+```
+ análise → aprova linha → SUGESTÃO EM ABERTO ──(desconta origem e destino)──┐
+                                │                                          │
+                                │ importa faturamento                      │ próxima análise
+                                ▼                                          │
+                            FATURADA (bases atualizadas já refletem) ───────┘
+```
+
+- **Em aberto:** desconta o excesso da origem e entra como trânsito no destino
+  (no modo pedidos, o trânsito abate os meses mais próximos primeiro).
+- **Faturada:** sai dos compromissos — o estoque já saiu da origem e já aparece
+  como pendência no destino nas bases atualizadas.
+- **Cancelada:** libera de volta o excesso e a necessidade.
+
+A caixa *"Considerar sugestões já aprovadas"* permite rodar uma análise do
+cenário cheio, ignorando a carteira, sem apagar nada.
+
+---
 
 ## 🖥️ Telas
 
-1. **Dashboard executivo** — KPIs (excesso, transferido/mês, imediata, fiscal),
-   matriz CD × mês, gráficos por CD e evolução mensal, filtro Total vs. >90 dias.
-2. **Plano de transferência** — tabela virtualizada com as ~9 mil linhas, busca,
-   filtros (CD, categoria, fornecedor, comprador, analista, cobertura),
-   exportação **CSV/Excel** (layout da aba `Transferencias_Long`).
-3. **Simulador de cenários** — reordena prioridade dos CDs (drag-and-drop),
-   alíquotas, fator de segurança e horizonte; compara **base vs. simulado**
-   (Δ R$ transferido e Δ fiscal); salva cenários nomeados.
-4. **Parâmetros e importação** — **seletor do modelo** (DRP × Estoque objetivo),
-   upload das bases (posição de estoque + pedidos **ou** estoque objetivo, em
-   CSV/Excel/XLSB) com **validação de qualidade** (schema, duplicidade de chave,
-   preços zerados/negativos, emb 0, SKUs sem demanda), prévia e log de
-   importações; histórico de parâmetros (auditoria).
-5. **Aprovação / execução** — marca linhas aprovadas (quem e quando) e gera o
-   **arquivo de ordem de transferência** para o ERP/WMS.
+1. **Dashboard executivo** — KPIs (excesso disponível, transferências, cobertura
+   da necessidade, impacto fiscal), **matriz origem × destino** (heatmap na
+   sequência escolhida), aproveitamento por origem, cobertura por destino,
+   maiores rotas e detalhe por rota (com quebra mensal no modo pedidos).
+2. **Nova análise** — upload das duas bases com validação, escolha do modo de
+   demanda, **sequência de origens**, **ordem de destinos** (cada CD mostra
+   quanto tem de excesso/falta e o que já está comprometido), alíquotas por rota
+   e parâmetros. Um clique roda a análise.
+3. **Plano de transferência** — uma linha por rota × SKU, filtros (origem,
+   destino, categoria, comprador, cobertura, só imediata), busca, ordenação,
+   exportação **CSV/Excel** e **aprovação** (selecionadas ou todas do filtro).
+4. **Carteira** — sugestões em aberto e faturadas, cancelamento, **modal de
+   importação do faturamento** (com prévia) e geração da **ordem de
+   transferência** para ERP/WMS com o saldo em aberto.
 
 ---
 
@@ -134,49 +157,37 @@ versão de cálculo** (o histórico nunca é sobrescrito).
 
 ```bash
 npm install
-npm run dev        # local em http://localhost:3000
+npm run dev        # http://localhost:3000
 ```
 
 1. Importe o repositório no Vercel (framework **Next.js** detectado
-   automaticamente; `vercel.json` já ajusta o timeout das rotas de cálculo).
-2. **Persistência (Vercel Neon / Postgres):** crie um banco **Neon** (ou Vercel
-   Postgres) no painel do Vercel e conecte ao projeto — a variável `POSTGRES_URL`
-   (também aceitamos `DATABASE_URL`) é injetada automaticamente. Opcionalmente
-   aplique o esquema completo:
+   automaticamente; `vercel.json` ajusta o timeout das rotas pesadas).
+2. **Persistência (Vercel Neon / Postgres):** crie um banco Neon no painel do
+   Vercel e conecte ao projeto — `POSTGRES_URL` (ou `DATABASE_URL`) é injetada
+   automaticamente. Opcionalmente aplique o esquema completo:
 
    ```bash
    npm run seed:pg
    ```
 
-   O esquema versionado está em `lib/store/schema.sql`. Sem banco configurado, a
-   aplicação roda em **modo demonstração** com uma base sintética em memória
-   (`lib/data/seed.ts`) — funcional para avaliação, porém efêmera por instância.
+   O que é persistido é a **carteira** (`sugestao_transferencia` e
+   `faturamento_evento`, criadas sob demanda) — o estado que precisa atravessar
+   análises. Sem banco, o app roda em **modo demonstração**: base sintética com
+   6 CDs (`lib/data/seed.ts`) e carteira em memória, efêmera por instância. A
+   tela avisa quando está nesse modo.
 
-   **Simulações salvas** ⟶ quando o banco está conectado, cada cenário salvo em
-   *Parâmetros e cenários* é gravado no Neon (tabela `cenario_simulacao`, criada
-   automaticamente) com o **resultado completo** do comparativo. Assim as
-   simulações são duráveis, compartilhadas entre instâncias e podem ser
-   **reexibidas ao clicar** nelas. Sem banco, ficam em memória (modo demo) e a
-   tela sinaliza o estado atual (🗄 *Persistidos (Neon)* vs. ⚠ *Em memória*).
+   > As bases importadas e o resultado das análises ficam em memória por
+   > instância (até 8 análises). O esquema em `lib/store/schema.sql` já prevê as
+   > tabelas de staging para persistir também as bases.
 
 ### Pipeline: PR aprovado → app publicado
 
-O deploy contínuo é feito pela **integração Git nativa do Vercel** (não precisa
-de workflow de deploy próprio):
-
-1. No Vercel, em *Settings → Git*, defina **Production Branch = `main`**.
-2. Toda vez que um PR é **mergeado em `main`**, o Vercel dispara o **deploy de
-   produção** automaticamente. Cada PR aberto também ganha um **Preview
-   Deployment** com URL própria para revisão.
-3. Para exigir **aprovação** antes do merge, ative no GitHub
-   *Settings → Branches → Branch protection rule* para `main`:
-   *Require a pull request before merging* + *Require approvals* +
-   *Require status checks to pass* → selecione o check **CI / test-build**
-   (definido em `.github/workflows/ci.yml`, que roda `npm test` e `npm run build`
-   em todo PR).
-
-Com isso o fluxo fica: **PR → CI verde + aprovação → merge em `main` → deploy de
-produção no Vercel**.
+1. No Vercel, *Settings → Git*: **Production Branch = `main`**.
+2. Merge em `main` dispara o deploy de produção; cada PR ganha um Preview.
+3. Para exigir aprovação, ative no GitHub *Settings → Branches → Branch
+   protection* em `main`: PR obrigatório + aprovação + status check
+   **CI / test-build** (`.github/workflows/ci.yml`, roda `npm test` e
+   `npm run build`).
 
 > **Autenticação (SSO):** `lib/auth.ts` é um stub pronto para o SSO corporativo
 > (lê `x-user-email`). Em produção, plugue o provedor (ex.: Azure AD via
@@ -184,50 +195,26 @@ produção no Vercel**.
 
 ---
 
-## 🔁 Cobertura de fórmulas, CDs configuráveis e validação precisa
-
-**A base anexada NÃO precisa conter nenhuma coluna de fórmula** da planilha
-original. O esquema canônico de entrada está em `lib/data/schema.ts`: o app lê
-apenas as **colunas cruas** (ERP/forecast) e **recalcula tudo** que era fórmula.
-O mapeamento fórmula → regra do motor está documentado em
-`CAMPOS_CALCULADOS` (mesmo arquivo):
-
-| Coluna de fórmula na planilha | Como o app calcula |
-|---|---|
-| `ID (dep+cod)` | `deposito + '-' + codigo` |
-| `EXCESSO EM STK` / `EXCESSOS + PEND` | REGRA 2 |
-| `PEDIDOS <mês> CD x` (XLOOKUP) | REGRA 3 — join indexado em pedidos |
-| `TRANSF...` / `SOBRA 1/2/3` | REGRA 4 — cascata cumsum-clamp |
-| `Valor Transf.` / `Qtd Imediata` / `(cx)` | REGRAS 5–6 |
-| `Status Cobertura` / `Impacto fiscal` | REGRAS 7–8 |
-
-**CDs configuráveis (rede de 11 CDs):** origem e destinos não são fixos. Em
-*Parâmetros* e no *Simulador* dá para **escolher o CD de origem** e
-**adicionar/remover/reordenar** os CDs de destino (com alíquota por rota) —
-qualquer quantidade. O motor sempre exclui a origem dos destinos. Os CDs
-presentes nas bases são descobertos em `/api/cds`.
-
-**Validação com erro exato (melhoria #3):** a importação aponta precisamente o
-problema — nome da **coluna obrigatória ausente** (com os nomes aceitos), e
-**linha + coluna + valor** de cada célula inválida (não numérica ou negativa),
-além de chaves duplicadas. Nada de erro silencioso.
-
 ## 📁 Estrutura
 
 ```
-app/                    Telas (App Router) + rotas de API
-  api/                  status, dashboard, plano, plano/export, params,
-                        calc, versions, simular, cenarios, aprovacoes[/ordem],
-                        import, importlog
-lib/engine/             Motor puro + tipos + testes + totais de referência
-lib/data/               Parsing, validação de importação, seed, parâmetros padrão
-lib/query/              Filtro/paginação/agregação server-side
-lib/store/              Store versionado (memória) + schema.sql (Postgres)
-lib/export.ts           CSV/Excel do plano e ordem de transferência
-components/              Nav + componentes de UI
+app/                   Telas + rotas de API
+  analise/             Nova análise (bases, sequências, parâmetros)
+  plano/               Plano de transferência + aprovação
+  carteira/            Sugestões aprovadas + faturamento + ordem ERP
+  api/                 status · cds · params · import · importlog · analise ·
+                       dashboard · plano[/export] · carteira[/ordem] · faturamento
+lib/engine/            Motor de rede (puro) + tipos + testes
+lib/data/              Esquemas, parsing, validação, leitura de planilha, seed
+lib/query/             Filtro/paginação/agregação server-side
+lib/store/             Estado da instância + carteira (Neon/memória) + schema.sql
+lib/export.ts          CSV/Excel do plano e ordem de transferência
+components/            Nav, UI e o seletor ordenado de CDs
 ```
 
-## 🔭 Evoluções previstas na arquitetura
-Múltiplos CDs de origem (origem já é parâmetro), solver de otimização global
+## 🔭 Próximos passos previstos
+
+Persistir as bases no Neon (staging já modelado), solver de otimização global
 como modo avançado (a cascata gulosa é o padrão), custo de frete por rota,
-restrições de capacidade e validade (shelf life), e integração direta com o ERP.
+restrições de capacidade e validade (shelf life), e integração direta com o ERP
+para dispensar a importação manual do faturamento.

@@ -1,22 +1,25 @@
 import { NextResponse } from "next/server";
 import { store } from "@/lib/store";
+import { carteira } from "@/lib/store/carteira";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const dataset = store.getDataset();
-  const versao = store.getVersaoAtual();
-  const params = store.getParametros();
+  const analise = store.getAnaliseAtual();
   return NextResponse.json({
-    dataset,
-    parametros: params,
-    versaoAtual: {
-      id: versao.id,
-      label: versao.label,
-      criadoEm: versao.criadoEm,
-      criadoPor: versao.criadoPor,
-      meta: versao.resultado.meta,
-      reconciliacao: versao.resultado.reconciliacao,
-    },
+    dataset: store.getDataset(),
+    parametros: store.getParametros(),
+    carteira: { ...(await carteira.resumo()), durable: carteira.durable() },
+    analiseAtual: analise
+      ? {
+          id: analise.id,
+          label: analise.label,
+          criadoEm: analise.criadoEm,
+          criadoPor: analise.criadoPor,
+          parametros: analise.parametros,
+          meta: analise.resultado.meta,
+          reconciliacao: analise.resultado.reconciliacao,
+        }
+      : null,
   });
 }

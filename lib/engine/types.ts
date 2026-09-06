@@ -1,12 +1,22 @@
 // ---------------------------------------------------------------------------
-// Modelo de dados do motor de otimização de transferências entre CDs.
-// Nenhum parâmetro de negócio é fixado em código: tudo vem de `Parametros`.
+// Modelo de dados do motor de transferências entre CDs — REDE MULTI-ORIGEM.
+//
+// Conceito (v2):
+//   * UMA base única com TODOS os CDs (mesmo layout da antiga base de origem).
+//     Cada linha (cd × produto) é ao mesmo tempo candidata a ORIGEM (pelo que
+//     sobra) e a DESTINO (pelo que falta).
+//   * UMA base de pedidos projetados (opcional), usada quando a análise roda no
+//     modo "pedidos".
+//   * O usuário escolhe a SEQUÊNCIA de origens e a SEQUÊNCIA de destinos. Cada
+//     origem, na ordem, olha todos os destinos selecionados, na ordem.
+//
+// Nenhum parâmetro de negócio é fixado em código: tudo vem de `ParametrosRede`.
 // ---------------------------------------------------------------------------
 
-/** 1 linha por SKU do CD de origem (ex.: CD10). Fonte: BASE_MODELOS. */
-export interface PosicaoEstoque {
-  idSku: string; // `${deposito}-${codigoProduto}` (ex.: '10-3858')
-  deposito: number; // CD de origem (ex.: 10)
+/** 1 linha por (CD, produto) da BASE ÚNICA de posição de estoque. */
+export interface LinhaBase {
+  idSku: string; // `${cd}-${codigoProduto}`
+  cd: number; // CD ao qual a linha pertence (origem e/ou destino)
   codigoProduto: number; // sem dígito verificador
   produto: string;
   estoqueDisponivel: number;
@@ -26,71 +36,92 @@ export interface PosicaoEstoque {
   flagAme?: string;
   monitorado?: string;
   marcaPropria?: string;
-  envelopado?: string;
   leadTime?: number;
 }
 
-/** 1 linha por (ano_mes, cd_destino, codigo_produto). Fonte: PEDIDOS PROJETADOS. */
+/** 1 linha por (ano_mes, cd_destino, codigo_produto). Base de PEDIDOS. */
 export interface PedidoProjetado {
   anoMes: string; // 'AAAA_MM'
   cdDestino: number;
   codigoProduto: number;
   pedido: number;
-  estoqueAtual?: number;
-  estoqueProjetado?: number;
-  eo?: number;
 }
 
-/**
- * 1 linha por (cd_destino, codigo_produto). Fonte: planilha do MODELO 2
- * (estoque objetivo). Colunas simples: CD destino, produto, descrição e o
- * saldo de estoque objetivo — a quantidade que aquele CD precisa receber.
- */
-export interface ObjetivoDestino {
+/** 1 linha da base de FATURAMENTO (transferências já realizadas). */
+export interface LinhaFaturamento {
+  cdOrigem: number;
   cdDestino: number;
   codigoProduto: number;
-  descricao: string;
-  saldoEstoqueObjetivo: number; // demanda a atender naquele CD (unidades)
+  quantidade: number;
+  documento?: string;
+  data?: string;
 }
 
 /**
- * Modelo de transferência escolhido (modelo híbrido):
- * - "drp": distribui o excesso por pedidos projetados (mês × CD) — modelo 1.
- * - "estoque_objetivo": distribui o excesso para atender o saldo de estoque
- *   objetivo por CD destino, sem quebra mensal — modelo 2.
+ * Fonte da demanda do CD destino:
+ * - "saldo_ideal": o que falta para o estoque objetivo do destino
+ *   (`objetivo − disponível − pendente`). Não usa a base de pedidos.
+ * - "pedidos": os pedidos projetados do destino, mês a mês (DRP puro).
  */
-export type ModeloTransferencia = "drp" | "estoque_objetivo";
+export type ModoDemanda = "saldo_ideal" | "pedidos";
 
-/** Parâmetros editáveis com trilha de auditoria. */
-export interface Parametros {
-  modelo: ModeloTransferencia; // modelo de transferência ativo (default "drp")
-  cdOrigem: number; // CD de origem do excesso (ex.: 10). Nunca é destino.
-  prioridadeCds: number[]; // CDs destino em ordem de alocação, ex.: [1, 9, 2, 8, 7]
-  horizonteMeses: string[]; // ex.: ['2026_07','2026_08','2026_09']
-  aliquotaFiscal: Record<number, number>; // por CD destino, fração (0.052 = 5,2%)
+/** Parâmetros de uma análise de rede. */
+export interface ParametrosRede {
+  modoDemanda: ModoDemanda;
+  /** CDs de origem NA ORDEM em que devem ser analisados. */
+  origens: number[];
+  /** CDs de destino NA ORDEM de prioridade de atendimento. */
+  destinos: number[];
+  /** Horizonte (AAAA_MM) — usado apenas no modo "pedidos". */
+  horizonteMeses: string[];
+  /** Alíquota fiscal por rota `origem>destino` (fração: 0.052 = 5,2%). */
+  aliquotas: Record<string, number>;
   fatorSegurancaImediata: number; // ex.: 0.5
   limiteCoberturaDias: number; // ex.: 90
+  /** Descontar as sugestões já aprovadas e ainda não faturadas. */
+  considerarAprovadas: boolean;
 }
 
-/** Índice de pedidos: chave `${anoMes}|${cd}|${codigoProduto}` -> quantidade. */
-export type PedidosIndex = Map<string, number>;
+/** Chave de rota origem→destino. */
+export function chaveRota(cdOrigem: number, cdDestino: number): string {
+  return `${cdOrigem}>${cdDestino}`;
+}
 
-/** Índice de estoque objetivo: chave `${cd}|${codigoProduto}` -> saldo objetivo. */
-export type ObjetivoIndex = Map<string, number>;
+/** Chave (cd, produto). */
+export function chaveCdProduto(cd: number, codigoProduto: number): string {
+  return `${cd}|${codigoProduto}`;
+}
 
+/** Chave (mês, cd, produto). */
 export function chavePedido(anoMes: string, cd: number, codigoProduto: number): string {
   return `${anoMes}|${cd}|${codigoProduto}`;
 }
 
-export function chaveObjetivo(cd: number, codigoProduto: number): string {
-  return `${cd}|${codigoProduto}`;
+/** Índice de pedidos: `${anoMes}|${cd}|${produto}` -> quantidade. */
+export type PedidosIndex = Map<string, number>;
+
+/**
+ * Saldos já comprometidos por sugestões APROVADAS e ainda não faturadas.
+ * Enquanto o faturamento não acontece, a base ainda não reflete a movimentação:
+ * o app desconta o saldo da origem e trata o volume como trânsito no destino.
+ */
+export interface Compromissos {
+  /** `${cd}|${produto}` -> unidades já comprometidas para SAIR daquele CD. */
+  saidaOrigem: Map<string, number>;
+  /** `${cd}|${produto}` -> unidades já a caminho daquele CD (trânsito). */
+  entradaDestino: Map<string, number>;
 }
 
-/** Uma linha do plano de transferência (cd_destino × sku) com transferência > 0. */
+export function compromissosVazios(): Compromissos {
+  return { saidaOrigem: new Map(), entradaDestino: new Map() };
+}
+
+/** Uma linha do plano: rota (origem → destino) × SKU, com transferência > 0. */
 export interface LinhaPlano {
+  cdOrigem: number;
   cdDestino: number;
-  idSku: string;
-  deposito: number;
+  rota: string; // `${cdOrigem}>${cdDestino}`
+  idSku: string; // `${cdOrigem}-${codigoProduto}`
   codigoProduto: number;
   produto: string;
   fornecedor: string;
@@ -102,79 +133,102 @@ export interface LinhaPlano {
   categoriaN4: string;
   precoUnitario: number;
   embCompra: number;
-  // por mês (mesma ordem de horizonteMeses) — modelo DRP.
-  // No modelo "estoque_objetivo" estes vetores vêm ZERADOS.
-  pedidoMes: number[];
-  transfMes: number[]; // unidades
-  valorTransfMes: number[]; // R$
-  transfCaixasMes: number[]; // caixas arredondadas
-  // Modelo "estoque_objetivo": transferência única para atender o saldo objetivo
-  // daquele CD (sem quebra mensal). No modelo DRP estes campos vêm ZERADOS.
-  transfObjetivo: number; // unidades a transferir para atender o estoque objetivo
-  valorTransfObjetivo: number; // R$
-  transfObjetivoCaixas: number; // caixas arredondadas
-  qtdTransfImediata: number; // unidades (não arredondado)
-  valorTransfImediata: number; // R$
-  imediataCaixas: number;
-  qtdImediataArredondada: number; // caixas * embCompra
-  coberturaDias: number;
-  statusCobertura: string; // 'Acima de N dias' | 'Ate N dias' | 'Sem giro'
-  transfTotal: number; // total transferido no CD (materialidade > 0): meses + objetivo
+  /** Modo "pedidos": demanda e transferência por mês (ordem do horizonte). */
+  demandaMes: number[];
+  transfMes: number[];
+  /** Modo "saldo_ideal": demanda e transferência únicas (sem quebra mensal). */
+  demandaSaldo: number;
+  transfSaldo: number;
+  transfTotal: number; // unidades (meses + saldo)
+  valorTotal: number; // R$
+  caixas: number; // transfTotal / emb (arredondado)
+  qtdImediata: number; // unidades que podem sair hoje (antes da caixa fechada)
+  imediataCaixas: number; // caixas fechadas
+  qtdImediataArredondada: number; // caixas * emb
+  valorImediata: number; // R$
+  coberturaDias: number; // cobertura do SKU no CD de origem
+  statusCobertura: string;
+  aliquota: number;
+  impactoFiscal: number; // valorTotal * aliquota
 }
 
-/** Quantidade total transferida na linha (unidades) — soma meses + objetivo. */
-export function qtdTotalLinha(l: LinhaPlano): number {
-  let s = l.transfObjetivo;
-  for (const t of l.transfMes) s += t;
-  return s;
-}
-
-/** Valor total transferido na linha (R$) — soma meses + objetivo. */
-export function valorTotalLinha(l: LinhaPlano): number {
-  let s = l.valorTransfObjetivo;
-  for (const v of l.valorTransfMes) s += v;
-  return s;
-}
-
-/** Agregado por CD destino × mês para o resumo executivo. */
-export interface ResumoCd {
+/** Agregado por rota (origem → destino). */
+export interface ResumoRota {
+  cdOrigem: number;
   cdDestino: number;
-  aliquotaFiscal: number;
+  rota: string;
+  aliquota: number;
   aliquotaDefinida: boolean;
-  transfMes: number[]; // qtd por mês (modelo DRP)
-  valorTransfMes: number[]; // R$ por mês (modelo DRP)
-  transfObjetivo: number; // qtd para atender estoque objetivo (modelo 2)
-  valorTransfObjetivo: number; // R$ para atender estoque objetivo (modelo 2)
+  qtdMes: number[];
+  valorMes: number[];
+  qtd: number;
+  valor: number;
   qtdImediata: number;
   valorImediata: number;
-  impactoFiscal: number; // soma valor transferido (meses + objetivo) * aliquota
+  impactoFiscal: number;
+  linhas: number;
+}
+
+/** Agregado por CD de origem (o quanto cada origem conseguiu escoar). */
+export interface ResumoOrigem {
+  cd: number;
+  ordem: number; // posição na sequência de análise
+  excessoQtd: number; // excesso transferível disponível (após aprovadas)
+  excessoRs: number;
+  transferidoQtd: number;
+  transferidoRs: number;
+  sobraQtd: number;
+  sobraRs: number;
+  skusComExcesso: number;
+}
+
+/** Agregado por CD de destino (o quanto da necessidade foi coberto). */
+export interface ResumoDestino {
+  cd: number;
+  ordem: number; // posição na sequência de prioridade
+  necessidadeQtd: number; // demanda considerada (após trânsito aprovado)
+  necessidadeRs: number;
+  atendidoQtd: number;
+  atendidoRs: number;
+  aberto: number; // necessidade não atendida (qtd)
+  cobertura: number; // atendidoQtd / necessidadeQtd (0..1)
 }
 
 export interface Reconciliacao {
-  skusTotal: number;
-  skusComExcesso: number;
-  invarianteOk: boolean; // sum(transf) + sobraFinal == excesso, por SKU
+  skusBase: number;
+  produtosDistintos: number;
+  paresOrigemProduto: number;
+  invarianteOk: boolean; // nenhuma origem transferiu mais que seu excesso,
+  // nenhum destino recebeu mais que sua necessidade
   maiorDivergencia: number;
+  autoTransferencias: number; // deve ser sempre 0 (origem == destino)
 }
 
-export interface ResultadoCalculo {
+export interface ResultadoRede {
   linhas: LinhaPlano[];
-  resumo: ResumoCd[];
+  rotas: ResumoRota[];
+  origens: ResumoOrigem[];
+  destinos: ResumoDestino[];
   reconciliacao: Reconciliacao;
   meta: {
-    modelo: ModeloTransferencia; // modelo usado neste cálculo
-    excessoSimplesRs: number; // sum(max(disp - objetivo,0) * preco) — headline "excesso em estoque"
-    excessoTotalRs: number; // sum(excesso_transferivel * preco) — base da alocação
-    valorTransfMesTotal: number[]; // por mês (todos os CDs) — modelo DRP
-    valorTransfObjetivoTotal: number; // total para atender estoque objetivo (modelo 2)
+    modoDemanda: ModoDemanda;
+    meses: string[]; // vazio no modo saldo_ideal
+    sequenciaOrigens: number[];
+    sequenciaDestinos: number[];
+    excessoDisponivelRs: number; // excesso das origens selecionadas
+    excessoUtilizadoRs: number; // parte do excesso efetivamente transferida
+    necessidadeTotalRs: number; // demanda dos destinos selecionados
+    necessidadeAtendidaRs: number;
+    valorTransfTotal: number;
     valorImediataTotal: number;
     impactoFiscalTotal: number;
+    qtdTransfTotal: number;
+    linhasPlano: number;
+    skusDistintos: number;
     tempoMs: number;
-    meses: string[];
-    prioridadeCds: number[];
-    alertaAliquotasIncompletas: number[]; // CDs sem alíquota definida mas com transferência
+    rotasSemAliquota: string[]; // rotas com transferência e sem alíquota definida
   };
 }
 
-/** Filtro Total vs. cobertura crítica. */
-export type FiltroCobertura = "total" | "acima90";
+/** Filtro Total vs. cobertura crítica (SKUs parados na origem). */
+export type FiltroCobertura = "total" | "acima_limite";

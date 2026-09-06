@@ -1,249 +1,266 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { PageHeader, Spinner } from "@/components/ui";
-import { fmtInt, fmtRs, rotuloMes } from "@/lib/format";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Alert, Badge, PageHeader, Spinner } from "@/components/ui";
+import { fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
-interface Linha {
-  cdDestino: number;
-  idSku: string;
-  codigoProduto: number;
-  produto: string;
-  fornecedor: string;
-  comprador: string;
-  analista: string;
-  categoriaN1: string;
-  precoUnitario: number;
-  embCompra: number;
-  pedidoMes: number[];
-  transfMes: number[];
-  valorTransfMes: number[];
-  transfCaixasMes: number[];
-  transfObjetivo: number;
-  valorTransfObjetivo: number;
-  transfObjetivoCaixas: number;
-  qtdTransfImediata: number;
-  imediataCaixas: number;
-  valorTransfImediata: number;
-  qtdImediataArredondada: number;
-  coberturaDias: number;
-  statusCobertura: string;
-  aprovada?: boolean;
+interface LinhaPlano {
+  cdOrigem: number; cdDestino: number; rota: string; codigoProduto: number; produto: string;
+  fornecedor: string; comprador: string; analista: string; categoriaN1: string;
+  precoUnitario: number; embCompra: number;
+  demandaMes: number[]; transfMes: number[]; demandaSaldo: number; transfSaldo: number;
+  transfTotal: number; valorTotal: number; caixas: number;
+  qtdImediata: number; imediataCaixas: number; qtdImediataArredondada: number; valorImediata: number;
+  coberturaDias: number; statusCobertura: string; aliquota: number; impactoFiscal: number;
+  naCarteira: boolean;
 }
 interface Facets {
-  cds: number[]; categorias: string[]; fornecedores: string[]; compradores: string[]; analistas: string[]; status: string[];
+  origens: number[]; destinos: number[]; rotas: string[]; categorias: string[];
+  fornecedores: string[]; compradores: string[]; analistas: string[]; status: string[];
 }
-interface Resp {
-  meses: string[]; modelo?: "drp" | "estoque_objetivo"; cdOrigem?: number; facets: Facets; total: number; page: number; totalPaginas: number; itens: Linha[];
+interface PlanoResp {
+  analiseId: string; modoDemanda: "saldo_ideal" | "pedidos"; meses: string[];
+  facets: Facets; totaisFiltro: { qtd: number; valor: number; imediata: number; fiscal: number };
+  total: number; page: number; pageSize: number; totalPaginas: number; itens: LinhaPlano[];
+  erro?: string; semAnalise?: boolean;
 }
 
-const emptyFacets: Facets = { cds: [], categorias: [], fornecedores: [], compradores: [], analistas: [], status: [] };
+const FILTROS_INICIAIS: Record<string, string> = {
+  cobertura: "total", origem: "", destino: "", categoria: "", fornecedor: "",
+  comprador: "", analista: "", status: "", q: "", soImediata: "false",
+};
 
-export default function PlanoPage() {
-  const [q, setQ] = useState("");
-  const [cobertura, setCobertura] = useState<"total" | "acima90">("total");
-  const [cd, setCd] = useState("");
-  const [categoria, setCategoria] = useState("");
-  const [fornecedor, setFornecedor] = useState("");
-  const [comprador, setComprador] = useState("");
-  const [analista, setAnalista] = useState("");
-  const [status, setStatus] = useState("");
+export default function Plano() {
+  const [filtros, setFiltros] = useState<Record<string, string>>(FILTROS_INICIAIS);
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<Resp | null>(null);
+  const [sort, setSort] = useState<{ campo: string; dir: "asc" | "desc" }>({ campo: "valorTotal", dir: "desc" });
+  const [data, setData] = useState<PlanoResp | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const pageSize = 300;
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [msg, setMsg] = useState<{ tom: "good" | "erro"; texto: string } | null>(null);
+  const [aprovando, setAprovando] = useState(false);
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
-    if (q) p.set("q", q);
-    p.set("cobertura", cobertura);
-    if (cd) p.set("cd", cd);
-    if (categoria) p.set("categoria", categoria);
-    if (fornecedor) p.set("fornecedor", fornecedor);
-    if (comprador) p.set("comprador", comprador);
-    if (analista) p.set("analista", analista);
-    if (status) p.set("status", status);
+    for (const [k, v] of Object.entries(filtros)) if (v && v !== "false") p.set(k, v);
     p.set("page", String(page));
-    p.set("pageSize", String(pageSize));
+    p.set("pageSize", "100");
+    p.set("sort", sort.campo);
+    p.set("dir", sort.dir);
     return p.toString();
-  }, [q, cobertura, cd, categoria, fornecedor, comprador, analista, status, page]);
+  }, [filtros, page, sort]);
 
-  useEffect(() => {
+  const carregar = useCallback(() => {
     setLoading(true);
-    const t = setTimeout(() => {
-      fetch(`/api/plano?${qs}`)
-        .then((r) => r.json())
-        .then(setData)
-        .finally(() => setLoading(false));
-    }, 200);
-    return () => clearTimeout(t);
+    fetch(`/api/plano?${qs}`).then((r) => r.json()).then(setData).finally(() => setLoading(false));
   }, [qs]);
+  useEffect(carregar, [carregar]);
 
-  // reset page quando filtros mudam
-  useEffect(() => { setPage(1); }, [q, cobertura, cd, categoria, fornecedor, comprador, analista, status]);
+  if (loading && !data) return <div className="pt-10"><Spinner label="Carregando plano…" /></div>;
+  if (!data) return null;
 
-  const facets = data?.facets ?? emptyFacets;
-  const meses = data?.meses ?? [];
-  const cdOrigem = data?.cdOrigem;
-  const objetivoMode = data?.modelo === "estoque_objetivo";
-  const itens = data?.itens ?? [];
+  if (data.semAnalise || data.erro) {
+    return (
+      <div>
+        <PageHeader title="Plano de transferência" />
+        <div className="card p-8 text-center">
+          <p className="text-sm text-slate-600">Rode uma análise para gerar o plano.</p>
+          <Link href="/analise" className="btn-primary mt-4 inline-flex">Ir para Nova análise</Link>
+        </div>
+      </div>
+    );
+  }
 
-  const parentRef = useRef<HTMLDivElement>(null);
-  const rowVirt = useVirtualizer({
-    count: itens.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 26,
-    overscan: 16,
-  });
+  const { itens, facets, meses, totaisFiltro } = data;
+  const modoPedidos = data.modoDemanda === "pedidos";
+  const chave = (l: LinhaPlano) => `${l.rota}|${l.codigoProduto}`;
+  const setF = (k: string, v: string) => { setFiltros((f) => ({ ...f, [k]: v })); setPage(1); setSel(new Set()); };
+  const ordenar = (campo: string) =>
+    setSort((s) => ({ campo, dir: s.campo === campo && s.dir === "desc" ? "asc" : "desc" }));
 
-  const rot = meses.map(rotuloMes);
-  const nCols = 11 + meses.length * 3 + (objetivoMode ? 3 : 0); // colspan total (loading / vazio)
+  const alternar = (k: string) => {
+    const novo = new Set(sel);
+    if (novo.has(k)) novo.delete(k); else novo.add(k);
+    setSel(novo);
+  };
+  const alternarTodas = () => {
+    if (itens.every((l) => sel.has(chave(l)))) setSel(new Set());
+    else setSel(new Set(itens.map(chave)));
+  };
+
+  const aprovar = async (tudoDoFiltro: boolean) => {
+    setAprovando(true);
+    setMsg(null);
+    try {
+      const body = tudoDoFiltro
+        ? { analiseId: data.analiseId, filtros }
+        : { analiseId: data.analiseId, chaves: Array.from(sel) };
+      const r = await fetch("/api/carteira", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setMsg({ tom: "erro", texto: `Erro: ${d.erro}` }); return; }
+      setMsg({ tom: "good", texto: `${fmtInt(d.gravadas)} linha(s) na carteira. Elas já descontam origem e destino na próxima análise.` });
+      setSel(new Set());
+      carregar();
+    } finally {
+      setAprovando(false);
+    }
+  };
+
+  const th = (campo: string, rotulo: string, extra = "") => (
+    <th className={`thc cursor-pointer select-none hover:text-slate-800 ${extra}`} onClick={() => ordenar(campo)}>
+      {rotulo}{sort.campo === campo ? (sort.dir === "desc" ? " ↓" : " ↑") : ""}
+    </th>
+  );
 
   return (
     <div>
       <PageHeader
         title="Plano de transferência"
-        subtitle={data ? `${fmtInt(data.total)} linhas (cd × sku) com transferência > 0` : "carregando…"}
+        subtitle={
+          <>
+            Análise <b>{data.analiseId}</b> · uma linha por rota (origem → destino) × SKU ·{" "}
+            {modoPedidos ? "abatendo pedidos" : "atendendo o saldo ideal"}
+          </>
+        }
         right={
           <div className="flex gap-2">
-            <a className="btn-ghost" href={`/api/plano/export?${qs}&format=csv`}>⬇ CSV</a>
-            <a className="btn-primary" href={`/api/plano/export?${qs}&format=xlsx`}>⬇ Excel</a>
+            <a href={`/api/plano/export?${qs}&format=csv`} className="btn-ghost">CSV</a>
+            <a href={`/api/plano/export?${qs}&format=xlsx`} className="btn-ghost">Excel</a>
           </div>
         }
       />
 
+      {msg && <div className="mb-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+
+      {/* ------------------------------ Filtros ------------------------------ */}
       <div className="card mb-3 p-3">
         <div className="flex flex-wrap items-end gap-2">
-          <div className="flex-1 min-w-[200px]">
-            <div className="label mb-1">Busca (produto / código)</div>
-            <input className="input w-full" placeholder="ex.: DIPIRONA ou 3858" value={q} onChange={(e) => setQ(e.target.value)} />
-          </div>
-          <Sel label="CD" value={cd} onChange={setCd} opts={facets.cds.map((c) => [String(c), `CD ${c}`])} />
-          <Sel label="Categoria N1" value={categoria} onChange={setCategoria} opts={facets.categorias.map((c) => [c, c])} />
-          <Sel label="Fornecedor" value={fornecedor} onChange={setFornecedor} opts={facets.fornecedores.map((c) => [c, c])} />
-          <Sel label="Comprador" value={comprador} onChange={setComprador} opts={facets.compradores.map((c) => [c, c])} />
-          <Sel label="Analista" value={analista} onChange={setAnalista} opts={facets.analistas.map((c) => [c, c])} />
-          <Sel label="Status cobertura" value={status} onChange={setStatus} opts={facets.status.map((c) => [c, c])} />
           <div>
-            <div className="label mb-1">Cobertura</div>
-            <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
-              <button onClick={() => setCobertura("total")} className={`rounded-md px-2 py-1.5 ${cobertura === "total" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Total</button>
-              <button onClick={() => setCobertura("acima90")} className={`rounded-md px-2 py-1.5 ${cobertura === "acima90" ? "bg-brand-600 text-white" : "text-slate-600"}`}>&gt;90d</button>
-            </div>
+            <div className="label mb-0.5">Buscar</div>
+            <input value={filtros.q} onChange={(e) => setF("q", e.target.value)} placeholder="produto ou código" className="input w-48 py-1.5 text-xs" />
+          </div>
+          <div>
+            <div className="label mb-0.5">Origem</div>
+            <select value={filtros.origem} onChange={(e) => setF("origem", e.target.value)} className="input py-1.5 text-xs">
+              <option value="">Todas</option>
+              {facets.origens.map((c) => <option key={c} value={c}>CD {c}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label mb-0.5">Destino</div>
+            <select value={filtros.destino} onChange={(e) => setF("destino", e.target.value)} className="input py-1.5 text-xs">
+              <option value="">Todos</option>
+              {facets.destinos.map((c) => <option key={c} value={c}>CD {c}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label mb-0.5">Categoria</div>
+            <select value={filtros.categoria} onChange={(e) => setF("categoria", e.target.value)} className="input py-1.5 text-xs">
+              <option value="">Todas</option>
+              {facets.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label mb-0.5">Comprador</div>
+            <select value={filtros.comprador} onChange={(e) => setF("comprador", e.target.value)} className="input py-1.5 text-xs">
+              <option value="">Todos</option>
+              {facets.compradores.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="label mb-0.5">Cobertura na origem</div>
+            <select value={filtros.cobertura} onChange={(e) => setF("cobertura", e.target.value)} className="input py-1.5 text-xs">
+              <option value="total">Total</option>
+              <option value="acima_limite">Só estoque parado</option>
+            </select>
+          </div>
+          <label className="flex items-center gap-1.5 pb-1.5 text-xs text-slate-600">
+            <input type="checkbox" checked={filtros.soImediata === "true"} onChange={(e) => setF("soImediata", String(e.target.checked))} />
+            Só com saída imediata
+          </label>
+          <button onClick={() => { setFiltros(FILTROS_INICIAIS); setPage(1); }} className="btn-ghost py-1.5 text-xs">Limpar</button>
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
+          <div className="flex flex-wrap gap-1.5">
+            <Badge>{fmtInt(data.total)} linhas</Badge>
+            <Badge tom="brand">{fmtRs(totaisFiltro.valor)}</Badge>
+            <Badge tom="good">Imediata {fmtRsCompacto(totaisFiltro.imediata)}</Badge>
+            <Badge tom="warn">Fiscal {fmtRsCompacto(totaisFiltro.fiscal)}</Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => aprovar(false)} disabled={sel.size === 0 || aprovando} className="btn-secondary py-1.5 text-xs">
+              Aprovar selecionadas ({sel.size})
+            </button>
+            <button onClick={() => aprovar(true)} disabled={aprovando || data.total === 0} className="btn-primary py-1.5 text-xs">
+              Aprovar todas do filtro ({fmtInt(data.total)})
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="card overflow-hidden">
-        <div ref={parentRef} className="thin-scroll max-h-[calc(100vh-300px)] overflow-auto">
-          <table className="min-w-full border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10 bg-slate-50">
-              {/* linha de grupos */}
-              <tr className="bg-slate-100/70">
-                <th className="gh" colSpan={4}>SKU</th>
-                <th className="gh grp" colSpan={meses.length}>Transferência (un)</th>
-                <th className="gh grp" colSpan={meses.length}>Caixas (cx)</th>
-                <th className="gh grp" colSpan={meses.length}>Valor (R$)</th>
-                {objetivoMode && <th className="gh grp bg-brand-50 text-brand-700" colSpan={3}>Atender estoque objetivo</th>}
-                <th className="gh grp bg-brand-50 text-brand-700" colSpan={4}>Transferência imediata</th>
-                <th className="gh grp" colSpan={3}>Indicadores</th>
-              </tr>
-              {/* linha de colunas */}
-              <tr className="border-b border-slate-200">
-                <th className="thc border-b border-slate-200">CD</th>
-                <th className="thc border-b border-slate-200">Cód.</th>
-                <th className="thc border-b border-slate-200">Produto</th>
-                <th className="thc border-b border-slate-200">Fornecedor</th>
-                {rot.map((m, i) => <th key={"t" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
-                {rot.map((m, i) => <th key={"c" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
-                {rot.map((m, i) => <th key={"v" + m} className={`thc num border-b border-slate-200 ${i === 0 ? "grp" : ""}`}>{m}</th>)}
-                {objetivoMode && <>
-                  <th className="thc num border-b border-slate-200 grp bg-brand-50/60" title="Unidades a transferir para atender o estoque objetivo">Un.</th>
-                  <th className="thc num border-b border-slate-200 bg-brand-50/60">Cx</th>
-                  <th className="thc num border-b border-slate-200 bg-brand-50/60">Valor R$</th>
-                </>}
-                <th className="thc num border-b border-slate-200 grp bg-brand-50/60">Qtd un.</th>
-                <th className="thc num border-b border-slate-200 bg-brand-50/60">Caixas</th>
-                <th className="thc num border-b border-slate-200 bg-brand-50/60">Un. a transferir</th>
-                <th className="thc num border-b border-slate-200 bg-brand-50/60">Valor R$</th>
-                <th className="thc num border-b border-slate-200 grp">Preço un.</th>
-                <th className="thc num border-b border-slate-200" title="Cobertura de estoque no CD de origem (dias)">Cob. CD orig.{cdOrigem != null ? ` ${cdOrigem}` : ""}</th>
-                <th className="thc border-b border-slate-200">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && itens.length === 0 ? (
-                <tr><td className="tdc py-6" colSpan={nCols}><Spinner label="Carregando plano…" /></td></tr>
-              ) : itens.length === 0 ? (
-                <tr><td className="tdc py-6 text-slate-500" colSpan={nCols}>Nenhuma linha para os filtros atuais.</td></tr>
-              ) : (
-                <>
-                  <tr style={{ height: rowVirt.getVirtualItems()[0]?.start ?? 0 }} />
-                  {rowVirt.getVirtualItems().map((vi) => {
-                    const l = itens[vi.index];
-                    return (
-                      <tr key={l.idSku + l.cdDestino} data-index={vi.index} ref={rowVirt.measureElement} className={`${vi.index % 2 ? "bg-slate-50/50" : "bg-white"} hover:bg-brand-50/40`}>
-                        <td className="tdc font-semibold text-slate-900">CD {l.cdDestino}</td>
-                        <td className="tdc text-slate-400">{l.codigoProduto}</td>
-                        <td className="tdc max-w-[200px] truncate font-medium" title={l.produto}>{l.produto}</td>
-                        <td className="tdc max-w-[140px] truncate text-slate-500" title={l.fornecedor}>{l.fornecedor}</td>
-                        {l.transfMes.map((t, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtInt(t)}</td>)}
-                        {l.transfCaixasMes.map((c, i) => <td key={i} className={`tdc num text-slate-500 ${i === 0 ? "grp" : ""}`}>{fmtInt(c)}</td>)}
-                        {l.valorTransfMes.map((v, i) => <td key={i} className={`tdc num ${i === 0 ? "grp" : ""}`}>{fmtRs(v)}</td>)}
-                        {objetivoMode && <>
-                          <td className="tdc num grp font-semibold text-brand-700 bg-brand-50/30">{fmtInt(l.transfObjetivo)}</td>
-                          <td className="tdc num text-slate-500 bg-brand-50/30">{fmtInt(l.transfObjetivoCaixas)}</td>
-                          <td className="tdc num bg-brand-50/30">{fmtRs(l.valorTransfObjetivo)}</td>
-                        </>}
-                        <td className="tdc num grp bg-brand-50/30">{fmtInt(l.qtdTransfImediata)}</td>
-                        <td className="tdc num text-slate-500 bg-brand-50/30">{fmtInt(l.imediataCaixas)}</td>
-                        <td className="tdc num font-semibold text-brand-700 bg-brand-50/30">{fmtInt(l.qtdImediataArredondada)}</td>
-                        <td className="tdc num bg-brand-50/30">{fmtRs(l.valorTransfImediata)}</td>
-                        <td className="tdc num grp text-slate-400">{fmtRs(l.precoUnitario)}</td>
-                        <td className="tdc num">{l.coberturaDias >= 9999 ? "—" : `${Math.round(l.coberturaDias)}d`}</td>
-                        <td className="tdc"><StatusBadge s={l.statusCobertura} /></td>
-                      </tr>
-                    );
-                  })}
-                  <tr style={{ height: Math.max(0, rowVirt.getTotalSize() - (rowVirt.getVirtualItems().at(-1)?.end ?? 0)) }} />
-                </>
-              )}
-            </tbody>
-          </table>
+      {/* ------------------------------- Tabela ------------------------------ */}
+      <div className="card overflow-x-auto thin-scroll">
+        <table className="min-w-full">
+          <thead className="sticky top-0 bg-white shadow-[0_1px_0_0_#e2e8f0]">
+            <tr>
+              <th className="thc w-8">
+                <input type="checkbox" checked={itens.length > 0 && itens.every((l) => sel.has(chave(l)))} onChange={alternarTodas} />
+              </th>
+              {th("rota", "Rota")}
+              {th("codigoProduto", "Código")}
+              {th("produto", "Produto")}
+              <th className="thc">Categoria</th>
+              {modoPedidos
+                ? meses.map((m) => <th key={m} className="thc text-right">Transf. {rotuloMes(m)}</th>)
+                : <th className="thc text-right">Necessidade</th>}
+              {th("transfTotal", "Qtd total", "text-right")}
+              <th className="thc text-right">Cx</th>
+              {th("qtdImediataArredondada", "Imediata (un)", "text-right")}
+              {th("valorTotal", "Valor", "text-right")}
+              {th("impactoFiscal", "Fiscal", "text-right")}
+              {th("coberturaDias", "Cob. origem", "text-right")}
+              <th className="thc">Carteira</th>
+            </tr>
+          </thead>
+          <tbody>
+            {itens.map((l) => {
+              const k = chave(l);
+              return (
+                <tr key={k} className={`border-b border-slate-100 ${sel.has(k) ? "bg-brand-50/60" : ""}`}>
+                  <td className="tdc"><input type="checkbox" checked={sel.has(k)} onChange={() => alternar(k)} /></td>
+                  <td className="tdc font-medium">CD{l.cdOrigem} → CD{l.cdDestino}</td>
+                  <td className="tdc">{l.codigoProduto}</td>
+                  <td className="tdc max-w-[220px] truncate" title={l.produto}>{l.produto}</td>
+                  <td className="tdc max-w-[130px] truncate text-slate-500" title={l.categoriaN1}>{l.categoriaN1}</td>
+                  {modoPedidos
+                    ? l.transfMes.map((t, i) => <td key={i} className="tdc num">{fmtInt(t)}</td>)
+                    : <td className="tdc num text-slate-500">{fmtInt(l.demandaSaldo)}</td>}
+                  <td className="tdc num font-semibold">{fmtInt(l.transfTotal)}</td>
+                  <td className="tdc num text-slate-500">{fmtInt(l.caixas)}</td>
+                  <td className="tdc num">{fmtInt(l.qtdImediataArredondada)}</td>
+                  <td className="tdc num">{fmtRs(l.valorTotal)}</td>
+                  <td className="tdc num text-slate-500">{fmtRs(l.impactoFiscal)}</td>
+                  <td className="tdc num text-slate-500">{l.coberturaDias >= 9999 ? "s/ giro" : fmtInt(l.coberturaDias)}</td>
+                  <td className="tdc">{l.naCarteira ? <Badge tom="good">aprovada</Badge> : <span className="text-slate-300">—</span>}</td>
+                </tr>
+              );
+            })}
+            {itens.length === 0 && (
+              <tr><td colSpan={14} className="td text-center text-slate-400">Nenhuma linha com os filtros atuais.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+        <div>Página {data.page} de {data.totalPaginas} · {fmtInt(data.total)} linhas · imediata cobre {fmtPct(totaisFiltro.valor > 0 ? totaisFiltro.imediata / totaisFiltro.valor : 0, 0)} do valor</div>
+        <div className="flex gap-2">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={data.page <= 1} className="btn-ghost py-1 text-xs">Anterior</button>
+          <button onClick={() => setPage((p) => p + 1)} disabled={data.page >= data.totalPaginas} className="btn-ghost py-1 text-xs">Próxima</button>
         </div>
-        {data && data.totalPaginas > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-sm">
-            <span className="text-slate-500">Página {data.page} de {data.totalPaginas} · {pageSize}/página</span>
-            <div className="flex gap-2">
-              <button className="btn-ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Anterior</button>
-              <button className="btn-ghost" disabled={page >= data.totalPaginas} onClick={() => setPage((p) => p + 1)}>Próxima</button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
-}
-
-function Sel({ label, value, onChange, opts }: { label: string; value: string; onChange: (v: string) => void; opts: [string, string][] }) {
-  return (
-    <div>
-      <div className="label mb-1">{label}</div>
-      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Todos</option>
-        {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-      </select>
-    </div>
-  );
-}
-
-function StatusBadge({ s }: { s: string }) {
-  const acima = s.startsWith("Acima");
-  const semGiro = s === "Sem giro";
-  const cor = acima ? "bg-rose-100 text-rose-700" : semGiro ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
-  const dias = s.match(/\d+/)?.[0];
-  const label = semGiro ? "sem giro" : acima ? `> ${dias}d` : `≤ ${dias}d`;
-  return <span className={`inline-flex items-center rounded px-1.5 text-[10px] font-medium ${cor}`} title={s}>{label}</span>;
 }

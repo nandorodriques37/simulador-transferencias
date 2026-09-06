@@ -1,78 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
-import { parseObjetivos, parsePedidos, parsePosicao } from "@/lib/data/parse";
+import { lerPlanilha } from "@/lib/data/planilha";
+import { parseBase, parsePedidos } from "@/lib/data/parse";
 import { validarImportacao } from "@/lib/data/validate";
-import { ObjetivoDestino, PedidoProjetado, PosicaoEstoque } from "@/lib/engine/types";
+import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
-async function lerPlanilha(file: File): Promise<Record<string, unknown>[]> {
-  const XLSX = await import("xlsx");
-  const buf = new Uint8Array(await file.arrayBuffer());
-  const wb = XLSX.read(buf, { type: "array" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { defval: null, raw: true });
-}
-
+/**
+ * Importa as DUAS bases da análise:
+ *   - "base"    → base única com todos os CDs (origem e destino);
+ *   - "pedidos" → pedidos projetados (usados no modo Pedidos).
+ * `dryRun=true` só valida e devolve a prévia, sem trocar a base.
+ */
 export async function POST(req: NextRequest) {
   const form = await req.formData();
-  const posicaoFile = form.get("posicao") as File | null;
+  const baseFile = form.get("base") as File | null;
   const pedidosFile = form.get("pedidos") as File | null;
-  const objetivoFile = form.get("objetivo") as File | null;
   const dryRun = form.get("dryRun") === "true";
 
-  if (!posicaoFile && !pedidosFile && !objetivoFile) {
-    return NextResponse.json({ erro: "envie ao menos um arquivo (posição de estoque, pedidos ou estoque objetivo)" }, { status: 400 });
-  }
+  if (!baseFile && !pedidosFile)
+    return NextResponse.json({ erro: "envie ao menos um arquivo (base de CDs ou base de pedidos)" }, { status: 400 });
 
-  // Modelo ativo (dos parâmetros) — direciona os avisos de validação à fonte
-  // de demanda relevante (pedidos no DRP, objetivo no modelo 2).
-  const modelo = store.getParametros().modelo ?? "drp";
-
-  let posicao: PosicaoEstoque[] = store.getPosicao();
-  let pedidos: PedidoProjetado[] = store.getPedidos();
-  let objetivos: ObjetivoDestino[] = store.getObjetivos();
-  let diagPosicao;
+  const modoDemanda = store.getParametros().modoDemanda;
+  let base: LinhaBase[] | null = null;
+  let pedidos: PedidoProjetado[] | null = null;
+  let diagBase;
   let diagPedidos;
-  let diagObjetivo;
-  const origens: string[] = [];
 
   try {
-    if (posicaoFile) {
-      const r = parsePosicao(await lerPlanilha(posicaoFile));
-      posicao = r.itens;
-      diagPosicao = r.diag;
-      origens.push(posicaoFile.name);
+    if (baseFile) {
+      const r = parseBase(await lerPlanilha(baseFile));
+      base = r.itens;
+      diagBase = r.diag;
     }
     if (pedidosFile) {
       const r = parsePedidos(await lerPlanilha(pedidosFile));
       pedidos = r.itens;
       diagPedidos = r.diag;
-      origens.push(pedidosFile.name);
-    }
-    if (objetivoFile) {
-      const r = parseObjetivos(await lerPlanilha(objetivoFile));
-      objetivos = r.itens;
-      diagObjetivo = r.diag;
-      origens.push(objetivoFile.name);
     }
   } catch (e) {
-    return NextResponse.json({ erro: `falha ao ler planilha: ${(e as Error).message}` }, { status: 400 });
+    return NextResponse.json({ erro: `falha ao ler a planilha: ${(e as Error).message}` }, { status: 400 });
   }
 
-  const relatorio = validarImportacao(posicao, pedidos, diagPosicao, diagPedidos, objetivos, diagObjetivo, modelo);
-  const origem = origens.join(" + ") || "importação";
+  const relatorio = validarImportacao(
+    base ?? store.getBase(),
+    pedidos ?? store.getPedidos(),
+    diagBase,
+    diagPedidos,
+    modoDemanda,
+  );
 
-  if (dryRun) {
-    return NextResponse.json({ dryRun: true, relatorio, origem });
-  }
-  if (!relatorio.ok) {
+  if (dryRun) return NextResponse.json({ dryRun: true, relatorio });
+  if (!relatorio.ok)
     return NextResponse.json({ erro: "importação bloqueada por erros de validação", relatorio }, { status: 422 });
-  }
 
-  const log = store.setDataset(posicao, pedidos, objetivos, origem, getUsuario(req), relatorio);
-  const versao = store.getVersaoAtual();
-  return NextResponse.json({ ok: true, log, versaoId: versao.id, meta: versao.resultado.meta, relatorio });
+  const log = store.setDataset(
+    base,
+    pedidos,
+    baseFile?.name ?? "",
+    pedidosFile?.name ?? "",
+    getUsuario(req),
+    relatorio,
+  );
+  return NextResponse.json({ ok: true, log, dataset: store.getDataset(), parametros: store.getParametros(), relatorio });
 }

@@ -1,35 +1,22 @@
-import { calcular, indexarObjetivos, indexarPedidos } from "@/lib/engine/calc";
-import { ObjetivoDestino, Parametros, PedidoProjetado, PosicaoEstoque, ResultadoCalculo } from "@/lib/engine/types";
+import { calcularRede, indexarPedidos } from "@/lib/engine/calc";
+import { Compromissos, LinhaBase, ParametrosRede, PedidoProjetado, ResultadoRede } from "@/lib/engine/types";
 import { parametrosPadrao } from "@/lib/data/defaults";
 import { gerarBaseDemo } from "@/lib/data/seed";
 import { RelatorioQualidade } from "@/lib/data/validate";
+import { carteira } from "@/lib/store/carteira";
 
-export interface CalcVersion {
+/** Uma análise rodada (snapshot completo do resultado). */
+export interface Analise {
   id: string;
   label: string;
   criadoEm: string;
   criadoPor: string;
   paramsHash: string;
-  parametros: Parametros;
-  datasetSource: string;
-  resultado: ResultadoCalculo;
-}
-
-export interface ParamHistoricoItem {
-  version: number;
-  criadoEm: string;
-  criadoPor: string;
-  parametros: Parametros;
-  hash: string;
-}
-
-export interface Cenario {
-  id: string;
-  nome: string;
-  criadoEm: string;
-  criadoPor: string;
-  parametros: Parametros;
-  baseVersionId: string;
+  parametros: ParametrosRede;
+  fonteBase: string;
+  fontePedidos: string;
+  compromissos: { origens: number; destinos: number }; // pares descontados
+  resultado: ResultadoRede;
 }
 
 export interface ImportLogItem {
@@ -37,43 +24,37 @@ export interface ImportLogItem {
   em: string;
   por: string;
   origem: string;
-  posicaoLinhas: number;
+  baseLinhas: number;
   pedidosLinhas: number;
-  objetivosLinhas: number;
+  cds: number[];
   relatorio: RelatorioQualidade;
 }
 
-export interface Aprovacao {
-  chave: string; // `${cdDestino}:${idSku}`
-  versionId: string;
-  aprovadoPor: string;
-  aprovadoEm: string;
-}
-
 interface EstadoStore {
-  posicao: PosicaoEstoque[];
+  base: LinhaBase[];
   pedidos: PedidoProjetado[];
-  objetivos: ObjetivoDestino[];
-  datasetSource: string;
+  fonteBase: string;
+  fontePedidos: string;
   importedEm: string;
-  parametros: Parametros;
-  paramHistorico: ParamHistoricoItem[];
-  versoes: CalcVersion[];
-  cenarios: Cenario[];
-  aprovacoes: Map<string, Aprovacao>;
+  parametros: ParametrosRede;
+  analises: Analise[];
   importLog: ImportLogItem[];
   seq: number;
 }
 
-export function hashParams(p: Parametros): string {
+/** Máximo de análises mantidas em memória (a mais antiga é descartada). */
+const MAX_ANALISES = 8;
+
+export function hashParams(p: ParametrosRede): string {
   const s = JSON.stringify({
-    modelo: p.modelo,
-    origem: p.cdOrigem,
-    cds: p.prioridadeCds,
+    modo: p.modoDemanda,
+    ori: p.origens,
+    dst: p.destinos,
     meses: p.horizonteMeses,
-    aliq: Object.entries(p.aliquotaFiscal).sort(),
+    aliq: Object.entries(p.aliquotas).sort(),
     fs: p.fatorSegurancaImediata,
     lim: p.limiteCoberturaDias,
+    apr: p.considerarAprovadas,
   });
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
@@ -81,33 +62,25 @@ export function hashParams(p: Parametros): string {
 }
 
 const nowIso = () => new Date().toISOString();
-const uid = (prefixo: string) => `${prefixo}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
 // Singleton por instância (sobrevive a HMR e a múltiplas rotas na mesma lambda).
 const g = globalThis as unknown as { __transfStore?: EstadoStore };
 
 function bootstrap(): EstadoStore {
-  const { posicao, pedidos, objetivos } = gerarBaseDemo();
+  const demo = gerarBaseDemo();
   const parametros = parametrosPadrao();
-  const st: EstadoStore = {
-    posicao,
-    pedidos,
-    objetivos,
-    datasetSource: "Base de demonstração (sintética)",
+  return {
+    base: demo.base,
+    pedidos: demo.pedidos,
+    fonteBase: "Base de demonstração (sintética, todos os CDs)",
+    fontePedidos: "Pedidos de demonstração (sintéticos)",
     importedEm: nowIso(),
-    parametros,
-    paramHistorico: [
-      { version: 1, criadoEm: nowIso(), criadoPor: "sistema", parametros, hash: hashParams(parametros) },
-    ],
-    versoes: [],
-    cenarios: [],
-    aprovacoes: new Map(),
+    parametros: ajustarParametrosAosCds(parametros, demo.cds),
+    analises: [],
     importLog: [],
     seq: 0,
   };
-  // Roda a primeira versão de cálculo (versão base).
-  runCalcInterno(st, parametros, "sistema", "Cálculo base");
-  return st;
 }
 
 function getState(): EstadoStore {
@@ -115,22 +88,25 @@ function getState(): EstadoStore {
   return g.__transfStore;
 }
 
-function runCalcInterno(st: EstadoStore, params: Parametros, por: string, label: string): CalcVersion {
-  const idx = indexarPedidos(st.pedidos);
-  const objIdx = indexarObjetivos(st.objetivos);
-  const resultado = calcular(st.posicao, idx, params, {}, objIdx);
-  const versao: CalcVersion = {
-    id: `v${++st.seq}`,
-    label,
-    criadoEm: nowIso(),
-    criadoPor: por,
-    paramsHash: hashParams(params),
-    parametros: params,
-    datasetSource: st.datasetSource,
-    resultado,
+/**
+ * Mantém as sequências coerentes com os CDs realmente presentes na base:
+ * remove CDs inexistentes e completa os destinos com os que sobraram.
+ */
+export function ajustarParametrosAosCds(p: ParametrosRede, cds: number[]): ParametrosRede {
+  if (cds.length === 0) return p;
+  const set = new Set(cds);
+  const origens = p.origens.filter((c) => set.has(c));
+  const destinos = p.destinos.filter((c) => set.has(c));
+  return {
+    ...p,
+    origens: origens.length ? origens : [cds[0]],
+    destinos: destinos.length ? destinos : cds.filter((c) => c !== (origens[0] ?? cds[0])),
   };
-  st.versoes.push(versao);
-  return versao;
+}
+
+/** CDs presentes na base, ordenados. */
+export function cdsDaBase(base: LinhaBase[]): number[] {
+  return Array.from(new Set(base.map((l) => l.cd))).sort((a, b) => a - b);
 }
 
 // ------------------------- API pública do store ---------------------------
@@ -138,138 +114,115 @@ function runCalcInterno(st: EstadoStore, params: Parametros, por: string, label:
 export const store = {
   getDataset() {
     const st = getState();
+    const cds = cdsDaBase(st.base);
     return {
-      posicaoLinhas: st.posicao.length,
+      baseLinhas: st.base.length,
       pedidosLinhas: st.pedidos.length,
-      objetivosLinhas: st.objetivos.length,
-      origem: st.datasetSource,
+      produtos: new Set(st.base.map((l) => l.codigoProduto)).size,
+      cds,
+      fonteBase: st.fonteBase,
+      fontePedidos: st.fontePedidos,
       importedEm: st.importedEm,
+      mesesPedidos: Array.from(new Set(st.pedidos.map((p) => p.anoMes))).sort(),
     };
   },
 
-  getPosicao(): PosicaoEstoque[] {
-    return getState().posicao;
+  getBase(): LinhaBase[] {
+    return getState().base;
   },
   getPedidos(): PedidoProjetado[] {
     return getState().pedidos;
   },
-  getObjetivos(): ObjetivoDestino[] {
-    return getState().objetivos;
-  },
 
   setDataset(
-    posicao: PosicaoEstoque[],
-    pedidos: PedidoProjetado[],
-    objetivos: ObjetivoDestino[],
-    origem: string,
+    base: LinhaBase[] | null,
+    pedidos: PedidoProjetado[] | null,
+    fonteBase: string,
+    fontePedidos: string,
     por: string,
     relatorio: RelatorioQualidade,
   ): ImportLogItem {
     const st = getState();
-    st.posicao = posicao;
-    st.pedidos = pedidos;
-    st.objetivos = objetivos;
-    st.datasetSource = origem;
+    if (base) {
+      st.base = base;
+      st.fonteBase = fonteBase;
+    }
+    if (pedidos) {
+      st.pedidos = pedidos;
+      st.fontePedidos = fontePedidos;
+    }
     st.importedEm = nowIso();
+    const cds = cdsDaBase(st.base);
+    st.parametros = ajustarParametrosAosCds(st.parametros, cds);
     const log: ImportLogItem = {
       id: uid("imp"),
       em: nowIso(),
       por,
-      origem,
-      posicaoLinhas: posicao.length,
-      pedidosLinhas: pedidos.length,
-      objetivosLinhas: objetivos.length,
+      origem: [base ? fonteBase : null, pedidos ? fontePedidos : null].filter(Boolean).join(" + "),
+      baseLinhas: st.base.length,
+      pedidosLinhas: st.pedidos.length,
+      cds,
       relatorio,
     };
     st.importLog.unshift(log);
-    // Nova base => novo cálculo (versão) mantendo os parâmetros atuais.
-    runCalcInterno(st, st.parametros, por, `Importação: ${origem}`);
     return log;
   },
 
-  getParametros(): Parametros {
+  getParametros(): ParametrosRede {
     return getState().parametros;
   },
 
-  updateParametros(params: Parametros, por: string): { version: number; parametros: Parametros } {
+  setParametros(p: ParametrosRede): ParametrosRede {
+    const st = getState();
+    st.parametros = ajustarParametrosAosCds(p, cdsDaBase(st.base));
+    return st.parametros;
+  },
+
+  /**
+   * Roda uma análise completa e guarda o snapshot.
+   * Os compromissos (sugestões aprovadas ainda não faturadas) entram no cálculo
+   * quando `parametros.considerarAprovadas` está ligado.
+   */
+  async rodarAnalise(params: ParametrosRede, por: string, label: string): Promise<Analise> {
     const st = getState();
     st.parametros = params;
-    const version = st.paramHistorico.length + 1;
-    st.paramHistorico.unshift({ version, criadoEm: nowIso(), criadoPor: por, parametros: params, hash: hashParams(params) });
-    // Toda mudança de parâmetro gera nova versão de cálculo (nunca sobrescreve).
-    runCalcInterno(st, params, por, `Parâmetros v${version}`);
-    return { version, parametros: params };
-  },
-
-  getParamHistorico(): ParamHistoricoItem[] {
-    return getState().paramHistorico;
-  },
-
-  runCalc(por = "sistema", label = "Recálculo manual"): CalcVersion {
-    const st = getState();
-    return runCalcInterno(st, st.parametros, por, label);
-  },
-
-  listVersoes(): Omit<CalcVersion, "resultado">[] {
-    return getState().versoes.map(({ resultado, ...v }) => ({
-      ...v,
-      // resumo leve
-    })).reverse();
-  },
-
-  getVersao(id?: string): CalcVersion | undefined {
-    const st = getState();
-    if (!id) return st.versoes[st.versoes.length - 1];
-    return st.versoes.find((v) => v.id === id);
-  },
-
-  getVersaoAtual(): CalcVersion {
-    const st = getState();
-    return st.versoes[st.versoes.length - 1];
-  },
-
-  // Simulador: calcula um cenário (sem persistir versão) para comparação.
-  simular(params: Parametros): ResultadoCalculo {
-    const st = getState();
-    return calcular(st.posicao, indexarPedidos(st.pedidos), params, {}, indexarObjetivos(st.objetivos));
-  },
-
-  salvarCenario(nome: string, params: Parametros, por: string): Cenario {
-    const st = getState();
-    const cen: Cenario = {
-      id: uid("cen"),
-      nome,
+    const compromissos: Compromissos = params.considerarAprovadas
+      ? await carteira.compromissos()
+      : { saidaOrigem: new Map(), entradaDestino: new Map() };
+    const idx = indexarPedidos(st.pedidos);
+    const resultado = calcularRede(st.base, idx, params, compromissos);
+    const analise: Analise = {
+      id: `a${++st.seq}`,
+      label,
       criadoEm: nowIso(),
       criadoPor: por,
+      paramsHash: hashParams(params),
       parametros: params,
-      baseVersionId: st.versoes[st.versoes.length - 1]?.id ?? "",
+      fonteBase: st.fonteBase,
+      fontePedidos: st.fontePedidos,
+      compromissos: { origens: compromissos.saidaOrigem.size, destinos: compromissos.entradaDestino.size },
+      resultado,
     };
-    st.cenarios.unshift(cen);
-    return cen;
+    st.analises.push(analise);
+    while (st.analises.length > MAX_ANALISES) st.analises.shift();
+    return analise;
   },
 
-  listCenarios(): Cenario[] {
-    return getState().cenarios;
+  listAnalises(): Omit<Analise, "resultado">[] {
+    return getState()
+      .analises.map(({ resultado: _r, ...a }) => a)
+      .reverse();
   },
 
-  // Aprovações (por versão + linha).
-  aprovar(versionId: string, chaves: string[], por: string, aprovado: boolean): number {
+  getAnalise(id?: string): Analise | undefined {
     const st = getState();
-    for (const chave of chaves) {
-      const k = `${versionId}:${chave}`;
-      if (aprovado) st.aprovacoes.set(k, { chave, versionId, aprovadoPor: por, aprovadoEm: nowIso() });
-      else st.aprovacoes.delete(k);
-    }
-    return chaves.length;
+    if (!id) return st.analises[st.analises.length - 1];
+    return st.analises.find((a) => a.id === id);
   },
 
-  getAprovacoes(versionId: string): Aprovacao[] {
+  getAnaliseAtual(): Analise | undefined {
     const st = getState();
-    return Array.from(st.aprovacoes.values()).filter((a) => a.versionId === versionId);
-  },
-
-  isAprovada(versionId: string, chave: string): Aprovacao | undefined {
-    return getState().aprovacoes.get(`${versionId}:${chave}`);
+    return st.analises[st.analises.length - 1];
   },
 
   getImportLog(): ImportLogItem[] {
