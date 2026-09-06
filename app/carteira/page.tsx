@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Badge, Kpi, Modal, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
+import { useMemo, useRef, useState } from "react";
+import { Alert, Badge, ErroCarga, Kpi, Modal, PageHeader, Progress, Revalidando, Secao, Spinner } from "@/components/ui";
 import { fmtInt, fmtRs, fmtRsCompacto } from "@/lib/format";
+import { useApi, useDebounce } from "@/lib/useApi";
 
 interface Baixa { qtd: number; em: string; registradoEm: string; documento?: string }
 interface Sugestao {
@@ -24,8 +25,7 @@ const nivelTom = { erro: "erro", aviso: "warn", info: "info" } as const;
 export default function Carteira() {
   const [status, setStatus] = useState<"aprovada" | "faturada" | "todas">("aprovada");
   const [q, setQ] = useState("");
-  const [data, setData] = useState<CarteiraResp | null>(null);
-  const [loading, setLoading] = useState(true);
+  const qDebounced = useDebounce(q, 300);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<{ tom: "good" | "erro" | "info"; texto: string } | null>(null);
 
@@ -38,15 +38,18 @@ export default function Carteira() {
   const [progresso, setProgresso] = useState(0);
   const fatRef = useRef<HTMLInputElement>(null);
 
-  const carregar = useCallback(() => {
-    setLoading(true);
+  const url = useMemo(() => {
     const p = new URLSearchParams({ status });
-    if (q) p.set("q", q);
-    fetch(`/api/carteira?${p}`).then((r) => r.json()).then(setData).finally(() => setLoading(false));
-  }, [status, q]);
-  useEffect(carregar, [carregar]);
+    if (qDebounced) p.set("q", qDebounced);
+    return `/api/carteira?${p}`;
+  }, [status, qDebounced]);
 
-  if (loading && !data) return <div className="pt-10"><Spinner label="Carregando carteira…" /></div>;
+  const api = useApi<CarteiraResp>(url);
+  const data = api.data;
+  const carregar = api.recarregar;
+
+  if (api.carregando) return <div className="pt-10"><Spinner label="Carregando carteira…" /></div>;
+  if (api.erro && !data) return <ErroCarga erro={api.erro} onTentar={api.recarregar} />;
   if (!data) return null;
 
   const { itens, resumo, eventos } = data;
@@ -56,11 +59,17 @@ export default function Carteira() {
   const cancelar = async () => {
     if (sel.size === 0) return;
     if (!window.confirm(`Cancelar ${sel.size} sugestão(ões)? Elas voltam a liberar excesso na origem e necessidade no destino.`)) return;
-    const r = await fetch("/api/carteira", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(sel) }) });
-    const d = await r.json();
-    setMsg(r.ok ? { tom: "good", texto: `${d.canceladas} sugestão(ões) cancelada(s).` } : { tom: "erro", texto: d.erro });
-    setSel(new Set());
-    carregar();
+    try {
+      const r = await fetch("/api/carteira", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(sel) }) });
+      const d = await r.json();
+      setMsg(r.ok ? { tom: "good", texto: `${d.canceladas} sugestão(ões) cancelada(s).` } : { tom: "erro", texto: d.erro });
+      setSel(new Set());
+      carregar();
+    } catch (e) {
+      // Sem isso, uma rede fora do ar deixava o cancelamento em silêncio — e o
+      // usuário sem saber se as sugestões continuam valendo.
+      setMsg({ tom: "erro", texto: `Falha ao cancelar: ${(e as Error).message}. Nada foi alterado.` });
+    }
   };
 
   const enviarFaturamento = async (dryRun: boolean) => {
@@ -71,9 +80,21 @@ export default function Carteira() {
     const fd = new FormData();
     fd.append("faturamento", fatFile);
     fd.append("dryRun", String(dryRun));
-    const r = await fetch("/api/faturamento", { method: "POST", body: fd });
-    setProgresso(90);
-    const d = await r.json();
+    let r: Response;
+    let d: {
+      erro?: string; faltando?: { rotulo: string; aliases: string[] }[];
+      linhas: number; quantidadeTotal: number; rotas?: string[];
+      relatorio: { achados: Achado[]; baixadas: number; qtdBaixada: number };
+    };
+    try {
+      r = await fetch("/api/faturamento", { method: "POST", body: fd });
+      setProgresso(90);
+      d = await r.json();
+    } catch (e) {
+      setEnviando(false);
+      setAchados([{ nivel: "erro", mensagem: `Falha no envio: ${(e as Error).message}`, qtd: 0 }]);
+      return;
+    }
     setProgresso(100);
     setEnviando(false);
 
@@ -111,6 +132,14 @@ export default function Carteira() {
       />
 
       {msg && <div className="mb-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+      {api.erro && (
+        <div className="mb-3">
+          <Alert tom="erro">
+            Falha ao atualizar a carteira ({api.erro}) — a lista abaixo é da última carga.{" "}
+            <button onClick={api.recarregar} className="underline">Tentar de novo</button>
+          </Alert>
+        </div>
+      )}
       {!data.durable && (
         <div className="mb-3">
           <Alert tom="warn">
@@ -160,6 +189,7 @@ export default function Carteira() {
           desc="Aprovadas descontam as próximas análises; faturadas já estão refletidas nas bases; canceladas não contam."
           right={
             <div className="flex flex-wrap items-end gap-2">
+              <div className="pb-1.5"><Revalidando ativo={api.revalidando} /></div>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="produto ou código" className="input w-44 py-1.5 text-xs" />
               <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)} className="input py-1.5 text-xs">
                 <option value="aprovada">Em aberto</option>

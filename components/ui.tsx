@@ -2,6 +2,18 @@
 
 import { ReactNode, useEffect } from "react";
 
+/** Fecha o que está aberto com Escape. Compartilhado pelo modal e pelo menu. */
+export function useEscape(ativo: boolean, onFechar: () => void) {
+  useEffect(() => {
+    if (!ativo) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onFechar();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ativo, onFechar]);
+}
+
 export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: ReactNode; right?: ReactNode }) {
   return (
     <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -43,7 +55,7 @@ export function Kpi({
 
 export function Secao({ titulo, desc, right, children }: { titulo: string; desc?: ReactNode; right?: ReactNode; children: ReactNode }) {
   return (
-    <section className="card p-4">
+    <section className="card min-w-0 p-4">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">{titulo}</h2>
@@ -53,6 +65,33 @@ export function Secao({ titulo, desc, right, children }: { titulo: string; desc?
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Falha de carga com saída. Antes, uma API fora do ar deixava a tela em branco
+ * — sem explicação e sem caminho de volta.
+ */
+export function ErroCarga({ erro, onTentar }: { erro: string; onTentar: () => void }) {
+  return (
+    <div className="card p-8 text-center">
+      <p className="text-sm font-medium text-slate-700">Não foi possível carregar esta tela.</p>
+      <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
+        {erro} — a conexão pode ter caído ou o servidor pode estar reiniciando.
+      </p>
+      <button onClick={onTentar} className="btn-primary mt-4 inline-flex">↻ Tentar de novo</button>
+    </div>
+  );
+}
+
+/** Faixa discreta de recarga: o conteúdo antigo fica, mas avisa que mudou. */
+export function Revalidando({ ativo, label = "Atualizando…" }: { ativo: boolean; label?: string }) {
+  if (!ativo) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-slate-400" role="status" aria-live="polite">
+      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-brand-500" />
+      {label}
+    </span>
   );
 }
 
@@ -157,14 +196,7 @@ export function Modal({
   children: ReactNode;
   largura?: string;
 }) {
-  useEffect(() => {
-    if (!aberto) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onFechar();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [aberto, onFechar]);
+  useEscape(aberto, onFechar);
 
   if (!aberto) return null;
   return (

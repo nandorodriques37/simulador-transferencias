@@ -16,6 +16,18 @@ body {
   color: #0f172a;
 }
 
+@layer base {
+  /* Navegação por teclado precisa de um anel visível — o padrão do navegador
+     some sob o reset do Tailwind em botões e links estilizados. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  [role="switch"]:focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-1 ring-offset-white rounded-md;
+  }
+}
+
 @layer components {
   .card {
     @apply bg-white rounded-xl border border-slate-200 shadow-sm;
