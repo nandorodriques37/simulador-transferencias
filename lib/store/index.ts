@@ -49,8 +49,15 @@ interface EstadoStore {
   seq: number;
 }
 
-/** Máximo de análises mantidas em memória (a mais antiga é descartada). */
-const MAX_ANALISES = 8;
+/**
+ * Máximo de análises mantidas em memória (a mais antiga é descartada).
+ *
+ * Cada análise carrega o plano inteiro: numa rede de 11 CDs × 80 mil produtos
+ * são ~240 mil linhas, cerca de 150 MB. Guardar muitas versões estoura a
+ * memória da função serverless — por isso o histórico vive de 2, o suficiente
+ * para comparar a rodada atual com a anterior.
+ */
+const MAX_ANALISES = 2;
 
 export function hashParams(p: ParametrosRede): string {
   const s = JSON.stringify({

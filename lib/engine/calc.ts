@@ -386,6 +386,34 @@ function unicos(cds: number[]): number[] {
   return out;
 }
 
+/**
+ * Aplica as CHAVES GERAIS às regras opcionais. Desligar um grupo não apaga os
+ * valores — eles continuam no parâmetro, prontos para religar.
+ */
+export function regrasEfetivas(p: ParametrosRede): {
+  coberturaMax: number;
+  coberturaMin: number;
+  caixaFechada: boolean;
+  minUnidades: number;
+  minValor: number;
+  minValorRota: number;
+  capacidade: CapacidadeRede;
+} {
+  const cobOk = p.limitesCoberturaAtivos !== false;
+  const embOk = p.limitesEmbarqueAtivos !== false;
+  const cap = p.capacidade ?? capacidadeVazia();
+  const capOk = cap.ativa !== false;
+  return {
+    coberturaMax: cobOk ? p.coberturaMaxDestinoDias ?? 0 : 0,
+    coberturaMin: cobOk ? p.coberturaMinDestinoDias ?? 0 : 0,
+    caixaFechada: embOk && p.arredondarCaixaFechada === true,
+    minUnidades: embOk ? p.minUnidadesLinha ?? 0 : 0,
+    minValor: embOk ? p.minValorLinha ?? 0 : 0,
+    minValorRota: embOk ? p.minValorRota ?? 0 : 0,
+    capacidade: capOk ? cap : { ...cap, porOrigem: {}, porDestino: {}, porRota: {} },
+  };
+}
+
 export interface OpcoesCalculo {
   /** Valida os invariantes de rede (origem e destino). Default true. */
   validarInvariante?: boolean;
@@ -428,13 +456,14 @@ export function calcularRede(
   const usarAprovadas = params.considerarAprovadas !== false;
   const comPendente = params.considerarPendenteOrigem !== false;
   const nivelar = params.estrategiaDestino === "nivelar_cobertura";
-  const diasMax = params.coberturaMaxDestinoDias ?? 0;
-  const diasMin = params.coberturaMinDestinoDias ?? 0;
-  const caixaFechada = params.arredondarCaixaFechada === true;
-  const minUn = params.minUnidadesLinha ?? 0;
-  const minVal = params.minValorLinha ?? 0;
-  const minValRota = params.minValorRota ?? 0;
-  const cap = params.capacidade ?? capacidadeVazia();
+  const regras = regrasEfetivas(params);
+  const diasMax = regras.coberturaMax;
+  const diasMin = regras.coberturaMin;
+  const caixaFechada = regras.caixaFechada;
+  const minUn = regras.minUnidades;
+  const minVal = regras.minValor;
+  const minValRota = regras.minValorRota;
+  const cap = regras.capacidade;
 
   const posOrigem = new Map<number, number>();
   origens.forEach((cd, i) => posOrigem.set(cd, i));

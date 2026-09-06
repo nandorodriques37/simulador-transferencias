@@ -107,6 +107,43 @@ export function Badge({ tom = "slate", children }: { tom?: "slate" | "brand" | "
   return <span className={`badge ${cls}`}>{children}</span>;
 }
 
+/**
+ * Chave liga/desliga de um grupo de regras. Desligar NÃO apaga a configuração —
+ * os valores continuam salvos, prontos para religar.
+ */
+export function Chave({
+  ligada,
+  onToggle,
+  children,
+}: {
+  ligada: boolean;
+  onToggle: (v: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={ligada}
+      onClick={() => onToggle(!ligada)}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+        ligada
+          ? "border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"
+          : "border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100"
+      }`}
+    >
+      <span
+        className={`inline-flex h-3.5 w-6 shrink-0 items-center rounded-full px-0.5 transition-colors ${
+          ligada ? "bg-brand-500" : "bg-slate-300"
+        }`}
+      >
+        <span className={`h-2.5 w-2.5 rounded-full bg-white transition-transform ${ligada ? "translate-x-2.5" : ""}`} />
+      </span>
+      {children}
+    </button>
+  );
+}
+
 export function Modal({
   aberto,
   titulo,

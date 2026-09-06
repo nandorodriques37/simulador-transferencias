@@ -29,6 +29,7 @@ interface DashResp {
     considerarPendenteOrigem: boolean;
     arredondarCaixaFechada: boolean;
     minValorRota: number;
+    semRestricoes: boolean;
   };
   kpis: {
     excessoDisponivelRs: number; valorTransfTotal: number; qtdTransfTotal: number;
@@ -138,6 +139,7 @@ export default function Dashboard() {
         {data.regras?.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura entre destinos</Badge>}
         {data.regras && !data.regras.considerarPendenteOrigem && <Badge tom="azul">Excesso físico (sem pendente)</Badge>}
         {data.regras?.arredondarCaixaFechada && <Badge>Só caixa fechada</Badge>}
+        {data.regras?.semRestricoes && <Badge tom="good">Sem restrições operacionais</Badge>}
       </div>
 
       {kpis.rotasSemAliquota.length > 0 && (

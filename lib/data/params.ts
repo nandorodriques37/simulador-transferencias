@@ -25,6 +25,7 @@ function normalizarCapacidade(bruta: Partial<CapacidadeRede> | undefined): Capac
     : "unidades";
   const prioridade: PrioridadeCapacidade = bruta.prioridade === "urgencia" ? "urgencia" : "valor";
   return {
+    ativa: bruta.ativa !== false,
     metrica,
     prioridade,
     porOrigem: positivos(bruta.porOrigem) as unknown as Record<number, number>,
@@ -85,9 +86,11 @@ export function normalizarParametros(
       limiteCoberturaDias: Number(body.limiteCoberturaDias),
       considerarAprovadas: body.considerarAprovadas !== false,
       considerarPendenteOrigem: body.considerarPendenteOrigem !== false,
+      limitesCoberturaAtivos: body.limitesCoberturaAtivos !== false,
       coberturaMaxDestinoDias: coberturaMax,
       coberturaMinDestinoDias: coberturaMin,
       estrategiaDestino: body.estrategiaDestino === "nivelar_cobertura" ? "nivelar_cobertura" : "prioridade",
+      limitesEmbarqueAtivos: body.limitesEmbarqueAtivos !== false,
       arredondarCaixaFechada: body.arredondarCaixaFechada === true,
       minUnidadesLinha: num(body.minUnidadesLinha),
       minValorLinha: num(body.minValorLinha),

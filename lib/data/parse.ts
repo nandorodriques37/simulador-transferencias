@@ -1,5 +1,6 @@
 import { LinhaBase, LinhaFaturamento, PedidoProjetado } from "@/lib/engine/types";
 import { ColSpec, normKey, SCHEMA_BASE, SCHEMA_FATURAMENTO, SCHEMA_PEDIDOS } from "./schema";
+import { TabelaBruta, tabelaDeObjetos } from "./tabela";
 
 export interface ErroLinha {
   linha: number; // linha aproximada na planilha (cabeçalho = 1)
@@ -57,12 +58,17 @@ function mapearColunas(header: string[], schema: ColSpec[]): ColMap[] {
   });
 }
 
-/** Parser genérico dirigido por esquema: coage tipos e coleta erros precisos. */
+/**
+ * Parser genérico dirigido por esquema: coage tipos e coleta erros precisos.
+ * Aceita qualquer fonte tabular (CSV lido direto ou objetos do SheetJS) e
+ * percorre as linhas UMA vez, sem materializar dicionários intermediários.
+ */
 export function parseComEsquema(
-  rows: Record<string, unknown>[],
+  fonte: TabelaBruta | Record<string, unknown>[],
   schema: ColSpec[],
 ): { itens: Record<string, unknown>[]; diag: DiagParse } {
-  const header = rows.length ? Object.keys(rows[0]) : [];
+  const tabela: TabelaBruta = Array.isArray(fonte) ? tabelaDeObjetos(fonte) : fonte;
+  const header = tabela.header;
   const cols = mapearColunas(header, schema);
   const usados = new Set(cols.map((c) => c.coluna).filter(Boolean) as string[]);
 
@@ -76,14 +82,16 @@ export function parseComEsquema(
   let errosTruncados = 0;
 
   if (faltando.length === 0) {
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const linha = i + 2; // +1 header, +1 base-1
+    // Resolve o índice de cada coluna do esquema uma única vez.
+    const posic = cols.map((c) => ({ spec: c.spec, coluna: c.coluna, idx: c.coluna ? header.indexOf(c.coluna) : -1 }));
+    const chaves = posic.filter((c) => c.spec.chave && c.spec.required);
+
+    tabela.forEach((celulas, linha) => {
       const obj: Record<string, unknown> = {};
       let linhaErro = false;
-      for (const { spec, coluna } of cols) {
-        if (!coluna) continue;
-        const raw = row[coluna];
+      for (const { spec, coluna, idx } of posic) {
+        if (idx < 0) continue;
+        const raw = celulas[idx];
         if (spec.tipo === "str") {
           obj[spec.campo] = str(raw);
           continue;
@@ -93,7 +101,7 @@ export function parseComEsquema(
           if (spec.required) {
             linhaErro = true;
             if (errosLinha.length < MAX_ERROS)
-              errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor não numérico em coluna obrigatória "${coluna}"` });
+              errosLinha.push({ linha, campo: spec.campo, coluna: coluna!, valor: str(raw), msg: `valor não numérico em coluna obrigatória "${coluna}"` });
             else errosTruncados++;
           }
           obj[spec.campo] = 0;
@@ -102,21 +110,19 @@ export function parseComEsquema(
         if (spec.naoNegativo && n < 0) {
           linhaErro = true;
           if (errosLinha.length < MAX_ERROS)
-            errosLinha.push({ linha, campo: spec.campo, coluna, valor: str(raw), msg: `valor negativo não permitido em "${coluna}" (${n})` });
+            errosLinha.push({ linha, campo: spec.campo, coluna: coluna!, valor: str(raw), msg: `valor negativo não permitido em "${coluna}" (${n})` });
           else errosTruncados++;
         }
         obj[spec.campo] = spec.tipo === "int" ? Math.round(n) : n;
       }
       // Linha só entra com as chaves obrigatórias preenchidas (descarta as
       // linhas em branco no fim do arquivo).
-      const temChave = cols
-        .filter((c) => c.spec.chave && c.spec.required)
-        .every((c) => {
-          const v = obj[c.spec.campo];
-          return v !== undefined && v !== "" && v !== 0;
-        });
+      const temChave = chaves.every((c) => {
+        const v = obj[c.spec.campo];
+        return v !== undefined && v !== "" && v !== 0;
+      });
       if (!linhaErro && temChave) itens.push(obj);
-    }
+    });
   }
 
   return {
@@ -126,7 +132,7 @@ export function parseComEsquema(
       mapeadas: cols.filter((c) => c.coluna).map((c) => ({ campo: c.spec.campo, rotulo: c.spec.rotulo, coluna: c.coluna! })),
       faltando,
       ignoradas,
-      totalLinhas: rows.length,
+      totalLinhas: tabela.total,
       linhasValidas: itens.length,
       errosLinha,
       errosTruncados,
@@ -135,8 +141,8 @@ export function parseComEsquema(
 }
 
 /** Base única de CDs — cada linha é (CD × produto). */
-export function parseBase(rows: Record<string, unknown>[]): { itens: LinhaBase[]; diag: DiagParse } {
-  const { itens, diag } = parseComEsquema(rows, SCHEMA_BASE);
+export function parseBase(fonte: TabelaBruta | Record<string, unknown>[]): { itens: LinhaBase[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(fonte, SCHEMA_BASE);
   const out: LinhaBase[] = itens.map((o) => {
     const cd = Number(o.cd);
     const codigo = Number(o.codigoProduto);
@@ -181,8 +187,8 @@ export function normalizarAnoMes(v: string): string {
   return s;
 }
 
-export function parsePedidos(rows: Record<string, unknown>[]): { itens: PedidoProjetado[]; diag: DiagParse } {
-  const { itens, diag } = parseComEsquema(rows, SCHEMA_PEDIDOS);
+export function parsePedidos(fonte: TabelaBruta | Record<string, unknown>[]): { itens: PedidoProjetado[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(fonte, SCHEMA_PEDIDOS);
   const out: PedidoProjetado[] = itens.map((o) => ({
     anoMes: normalizarAnoMes(str(o.anoMes)),
     cdDestino: Number(o.cdDestino),
@@ -192,8 +198,8 @@ export function parsePedidos(rows: Record<string, unknown>[]): { itens: PedidoPr
   return { itens: out, diag };
 }
 
-export function parseFaturamento(rows: Record<string, unknown>[]): { itens: LinhaFaturamento[]; diag: DiagParse } {
-  const { itens, diag } = parseComEsquema(rows, SCHEMA_FATURAMENTO);
+export function parseFaturamento(fonte: TabelaBruta | Record<string, unknown>[]): { itens: LinhaFaturamento[]; diag: DiagParse } {
+  const { itens, diag } = parseComEsquema(fonte, SCHEMA_FATURAMENTO);
   const out: LinhaFaturamento[] = itens.map((o) => ({
     cdOrigem: Number(o.cdOrigem),
     cdDestino: Number(o.cdDestino),

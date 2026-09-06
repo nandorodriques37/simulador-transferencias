@@ -8,6 +8,7 @@ import {
   indexarPedidos,
   necessidadeSaldoIdeal,
   nivelarPorCobertura,
+  regrasEfetivas,
   precoUnitario,
 } from "./calc";
 import {
@@ -60,9 +61,11 @@ function params(over: Partial<ParametrosRede> = {}): ParametrosRede {
     limiteCoberturaDias: 90,
     considerarAprovadas: true,
     considerarPendenteOrigem: true,
+    limitesCoberturaAtivos: true,
     coberturaMaxDestinoDias: 0,
     coberturaMinDestinoDias: 0,
     estrategiaDestino: "prioridade",
+    limitesEmbarqueAtivos: true,
     arredondarCaixaFechada: false,
     minUnidadesLinha: 0,
     minValorLinha: 0,
@@ -753,5 +756,63 @@ describe("capacidade no nivelamento e com caixa fechada", () => {
       params({ origens: [10], destinos: [1], arredondarCaixaFechada: true, capacidade: capacidade({ porDestino: { 1: 250 } }) }),
     );
     expect(r.linhas[0].transfSaldo).toBe(240); // 20 caixas, não 250 unidades
+  });
+});
+
+describe("chaves gerais — desligar sem perder a configuração", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 1000, embCompra: 12 }),
+    linha(1, 100, { estoqueObjetivo: 900, vendaMedia3m: 300 }),
+  ];
+  const comTudo = params({
+    origens: [10],
+    destinos: [1],
+    coberturaMaxDestinoDias: 30,
+    arredondarCaixaFechada: true,
+    minUnidadesLinha: 50,
+    capacidade: capacidade({ porDestino: { 1: 120 } }),
+  });
+
+  it("com as regras ligadas, o menor limite manda", () => {
+    const r = rodar(b, comTudo);
+    expect(r.linhas[0].transfSaldo).toBe(120); // capacidade < teto de cobertura
+  });
+
+  it("desligar a capacidade libera o teto de cobertura", () => {
+    const r = rodar(b, { ...comTudo, capacidade: { ...comTudo.capacidade, ativa: false } });
+    expect(r.linhas[0].transfSaldo).toBe(300); // 10/dia × 30 dias, em caixa fechada
+  });
+
+  it("desligar o teto/piso mantém capacidade e caixa fechada", () => {
+    const r = rodar(b, { ...comTudo, limitesCoberturaAtivos: false });
+    expect(r.linhas[0].transfSaldo).toBe(120);
+    expect(r.destinos[0].necessidadeQtd).toBe(900);
+  });
+
+  it("desligar o embarque tira caixa fechada e mínimos", () => {
+    const semEmbarque = rodar(b, {
+      ...comTudo,
+      limitesEmbarqueAtivos: false,
+      capacidade: { ...comTudo.capacidade, porDestino: { 1: 125 } },
+    });
+    expect(semEmbarque.linhas[0].transfSaldo).toBe(125); // não arredonda para 120
+  });
+
+  it("desligar tudo devolve o cenário cru", () => {
+    const r = rodar(b, {
+      ...comTudo,
+      limitesCoberturaAtivos: false,
+      limitesEmbarqueAtivos: false,
+      capacidade: { ...comTudo.capacidade, ativa: false },
+    });
+    expect(r.linhas[0].transfSaldo).toBe(900);
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(0);
+  });
+
+  it("os valores continuam guardados no parâmetro depois de desligar", () => {
+    const desligado = { ...comTudo, limitesCoberturaAtivos: false };
+    expect(desligado.coberturaMaxDestinoDias).toBe(30);
+    expect(regrasEfetivas(desligado).coberturaMax).toBe(0);
+    expect(regrasEfetivas({ ...desligado, limitesCoberturaAtivos: true }).coberturaMax).toBe(30);
   });
 });

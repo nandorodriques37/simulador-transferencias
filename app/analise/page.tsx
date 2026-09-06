@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Badge, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
+import { Alert, Badge, Chave, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
@@ -11,6 +11,7 @@ type ModoDemanda = "saldo_ideal" | "pedidos";
 type MetricaCapacidade = "unidades" | "caixas" | "paletes" | "peso" | "volume" | "valor";
 
 interface CapacidadeRede {
+  ativa: boolean;
   metrica: MetricaCapacidade;
   porOrigem: Record<number, number>;
   porDestino: Record<number, number>;
@@ -43,6 +44,8 @@ interface Parametros {
   arredondarCaixaFechada: boolean;
   minUnidadesLinha: number;
   minValorLinha: number;
+  limitesCoberturaAtivos: boolean;
+  limitesEmbarqueAtivos: boolean;
   minValorRota: number;
   capacidade: CapacidadeRede;
 }
@@ -88,6 +91,7 @@ export default function NovaAnalise() {
 
   const set = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
   const cap: CapacidadeRede = params.capacidade ?? {
+    ativa: true,
     metrica: "unidades",
     porOrigem: {},
     porDestino: {},
@@ -101,6 +105,23 @@ export default function NovaAnalise() {
     else alvo[String(chave)] = Number(valor);
     setCap({ [campo]: alvo } as Partial<CapacidadeRede>);
   };
+  // Chaves gerais: desligam um grupo inteiro sem apagar o que foi configurado.
+  const capAtiva = cap.ativa !== false;
+  const cobAtiva = params.limitesCoberturaAtivos !== false;
+  const embAtiva = params.limitesEmbarqueAtivos !== false;
+  const algumaLigada = cobAtiva || embAtiva || capAtiva;
+  const desligarTudo = () =>
+    set({
+      limitesCoberturaAtivos: false,
+      limitesEmbarqueAtivos: false,
+      capacidade: { ...cap, ativa: false },
+    });
+  const religarTudo = () =>
+    set({
+      limitesCoberturaAtivos: true,
+      limitesEmbarqueAtivos: true,
+      capacidade: { ...cap, ativa: true },
+    });
   const metricaAtual = METRICAS.find((m) => m.valor === cap.metrica);
   const unidadeCap = metricaAtual?.unidade ?? "un";
   const temCapacidade =
@@ -169,6 +190,33 @@ export default function NovaAnalise() {
       />
 
       {msg && <div className="mb-4"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+
+      {/* --------------------- Chaves gerais das restrições -------------------- */}
+      <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label">Restrições</span>
+          <Chave ligada={cobAtiva} onToggle={(v) => set({ limitesCoberturaAtivos: v })}>
+            Teto/piso de cobertura
+            {cobAtiva && (params.coberturaMaxDestinoDias > 0 || params.coberturaMinDestinoDias > 0) && (
+              <span className="ml-1 opacity-70">
+                {params.coberturaMaxDestinoDias > 0 ? `máx ${params.coberturaMaxDestinoDias}d` : ""}
+                {params.coberturaMaxDestinoDias > 0 && params.coberturaMinDestinoDias > 0 ? " · " : ""}
+                {params.coberturaMinDestinoDias > 0 ? `mín ${params.coberturaMinDestinoDias}d` : ""}
+              </span>
+            )}
+          </Chave>
+          <Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>
+            Caixa fechada e mínimos
+          </Chave>
+          <Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>
+            Capacidade operacional
+            {capAtiva && temCapacidade && <span className="ml-1 opacity-70">({unidadeCap})</span>}
+          </Chave>
+        </div>
+        <button type="button" onClick={algumaLigada ? desligarTudo : religarTudo} className="btn-ghost py-1.5 text-xs">
+          {algumaLigada ? "Desligar todas as restrições" : "Religar restrições"}
+        </button>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* ------------------------- 1. Bases ------------------------- */}
@@ -276,15 +324,20 @@ export default function NovaAnalise() {
             )}
 
             <div className="mt-4 border-t border-slate-100 pt-3">
-              <div className="label mb-1.5">Limites de cobertura do destino</div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="label">Limites de cobertura do destino</span>
+                <Chave ligada={cobAtiva} onToggle={(v) => set({ limitesCoberturaAtivos: v })}>
+                  {cobAtiva ? "ativo" : "desligado"}
+                </Chave>
+              </div>
+              <div className={`grid grid-cols-2 gap-2 ${cobAtiva ? "" : "opacity-40"}`}>
                 <label className="block">
                   <span className="block text-[11px] text-slate-500">Teto (dias) · 0 = sem teto · sugerido 60–90</span>
-                  <input type="number" min="0" value={params.coberturaMaxDestinoDias} onChange={(e) => set({ coberturaMaxDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
+                  <input type="number" min="0" disabled={!cobAtiva} value={params.coberturaMaxDestinoDias} onChange={(e) => set({ coberturaMaxDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
                 </label>
                 <label className="block">
                   <span className="block text-[11px] text-slate-500">Piso (dias) · 0 = sem piso · sugerido 15–30</span>
-                  <input type="number" min="0" value={params.coberturaMinDestinoDias} onChange={(e) => set({ coberturaMinDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
+                  <input type="number" min="0" disabled={!cobAtiva} value={params.coberturaMinDestinoDias} onChange={(e) => set({ coberturaMinDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
                 </label>
               </div>
               <p className="mt-1.5 text-[11px] text-slate-500">
@@ -364,7 +417,15 @@ export default function NovaAnalise() {
 
         {/* -------------------- 5. Parâmetros ---------------------- */}
         <div className="lg:col-span-3">
-          <Secao titulo="5 · Parâmetros e alíquotas por rota" desc="O ICMS depende do par origem → destino, por isso a alíquota é por rota.">
+          <Secao
+            titulo="5 · Parâmetros, embarque e alíquotas por rota"
+            desc="O ICMS depende do par origem → destino, por isso a alíquota é por rota."
+            right={
+              <Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>
+                Caixa fechada e mínimos {embAtiva ? "ativos" : "desligados"}
+              </Chave>
+            }
+          >
             <div className="grid gap-4 md:grid-cols-4">
               <div>
                 <div className="label mb-1">Fator de segurança (imediata)</div>
@@ -376,24 +437,24 @@ export default function NovaAnalise() {
                 <input type="number" min="1" value={params.limiteCoberturaDias} onChange={(e) => set({ limiteCoberturaDias: Number(e.target.value) })} className="input w-full" />
                 <p className="mt-1 text-[11px] text-slate-500">Classifica o SKU parado na origem.</p>
               </div>
-              <div>
+              <div className={embAtiva ? "" : "opacity-40"}>
                 <div className="label mb-1">Mínimo por linha (un)</div>
-                <input type="number" min="0" value={params.minUnidadesLinha} onChange={(e) => set({ minUnidadesLinha: Number(e.target.value) })} className="input w-full" />
+                <input type="number" min="0" disabled={!embAtiva} value={params.minUnidadesLinha} onChange={(e) => set({ minUnidadesLinha: Number(e.target.value) })} className="input w-full" />
                 <p className="mt-1 text-[11px] text-slate-500">Abaixo disso a linha não embarca.</p>
               </div>
-              <div>
+              <div className={embAtiva ? "" : "opacity-40"}>
                 <div className="label mb-1">Mínimo por linha (R$)</div>
-                <input type="number" min="0" step="10" value={params.minValorLinha} onChange={(e) => set({ minValorLinha: Number(e.target.value) })} className="input w-full" />
+                <input type="number" min="0" step="10" disabled={!embAtiva} value={params.minValorLinha} onChange={(e) => set({ minValorLinha: Number(e.target.value) })} className="input w-full" />
                 <p className="mt-1 text-[11px] text-slate-500">Corta a cauda longa sem valor.</p>
               </div>
-              <div>
+              <div className={embAtiva ? "" : "opacity-40"}>
                 <div className="label mb-1">Carga mínima por rota (R$)</div>
-                <input type="number" min="0" step="100" value={params.minValorRota} onChange={(e) => set({ minValorRota: Number(e.target.value) })} className="input w-full" />
+                <input type="number" min="0" step="100" disabled={!embAtiva} value={params.minValorRota} onChange={(e) => set({ minValorRota: Number(e.target.value) })} className="input w-full" />
                 <p className="mt-1 text-[11px] text-slate-500">Rota abaixo do piso sai do plano inteira.</p>
               </div>
-              <div className="flex items-start pt-5">
+              <div className={`flex items-start pt-5 ${embAtiva ? "" : "opacity-40"}`}>
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" checked={params.arredondarCaixaFechada} onChange={(e) => set({ arredondarCaixaFechada: e.target.checked })} className="mt-0.5" />
+                  <input type="checkbox" disabled={!embAtiva} checked={params.arredondarCaixaFechada} onChange={(e) => set({ arredondarCaixaFechada: e.target.checked })} className="mt-0.5" />
                   <span>
                     <span className="block text-sm font-medium text-slate-800">Só caixa fechada</span>
                     <span className="block text-[11px] text-slate-500">Transfere múltiplos da embalagem; o resto fica na origem.</span>
@@ -407,12 +468,13 @@ export default function NovaAnalise() {
                   <Badge tom="brand">{params.destinos.length} destino(s)</Badge>
                   <Badge>{rotas.length} rota(s)</Badge>
                   <Badge tom={modoPedidos ? "warn" : "good"}>{modoPedidos ? `Pedidos · ${params.horizonteMeses.length} mês(es)` : "Saldo ideal"}</Badge>
-                  {params.coberturaMaxDestinoDias > 0 && <Badge>Teto {params.coberturaMaxDestinoDias}d</Badge>}
-                  {params.coberturaMinDestinoDias > 0 && <Badge>Piso {params.coberturaMinDestinoDias}d</Badge>}
+                  {cobAtiva && params.coberturaMaxDestinoDias > 0 && <Badge>Teto {params.coberturaMaxDestinoDias}d</Badge>}
+                  {cobAtiva && params.coberturaMinDestinoDias > 0 && <Badge>Piso {params.coberturaMinDestinoDias}d</Badge>}
                   {params.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura</Badge>}
                   {!params.considerarPendenteOrigem && <Badge tom="azul">Excesso físico</Badge>}
-                  {params.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
-                  {temCapacidade && <Badge tom="warn">Capacidade limitada ({unidadeCap})</Badge>}
+                  {embAtiva && params.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
+                  {capAtiva && temCapacidade && <Badge tom="warn">Capacidade limitada ({unidadeCap})</Badge>}
+                  {!cobAtiva && !embAtiva && !capAtiva && <Badge tom="good">Sem restrições</Badge>}
                 </div>
               </div>
             </div>
@@ -475,6 +537,11 @@ export default function NovaAnalise() {
             desc="O limite físico da rede na janela desta análise: quanto cada CD expede, quanto recebe e quanto cada rota transporta. Deixe 0 para sem limite."
             right={
               <div className="flex flex-wrap items-end gap-2">
+                <div className="pb-1.5">
+                  <Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>
+                    {capAtiva ? "Limites ativos" : "Limites desligados"}
+                  </Chave>
+                </div>
                 <label className="block">
                   <span className="label block">Métrica</span>
                   <select
@@ -510,7 +577,15 @@ export default function NovaAnalise() {
               </div>
             )}
 
-            <div className="grid gap-4 md:grid-cols-2">
+            {!capAtiva && temCapacidade && (
+              <div className="mb-3">
+                <Alert tom="info">
+                  Limites <b>desligados</b> — os valores abaixo ficam guardados e voltam a valer quando você religar a chave.
+                </Alert>
+              </div>
+            )}
+
+            <div className={`grid gap-4 md:grid-cols-2 ${capAtiva ? "" : "opacity-40"}`}>
               <div>
                 <div className="label mb-1.5">Expedição por origem ({unidadeCap})</div>
                 <div className="flex flex-col gap-1.5">
@@ -521,6 +596,7 @@ export default function NovaAnalise() {
                         type="number"
                         min="0"
                         placeholder="sem limite"
+                        disabled={!capAtiva}
                         value={cap.porOrigem?.[cd] ?? ""}
                         onChange={(e) => setLimite("porOrigem", cd, e.target.value)}
                         className="input w-40 py-1.5 text-right text-xs"
@@ -540,6 +616,7 @@ export default function NovaAnalise() {
                         type="number"
                         min="0"
                         placeholder="sem limite"
+                        disabled={!capAtiva}
                         value={cap.porDestino?.[cd] ?? ""}
                         onChange={(e) => setLimite("porDestino", cd, e.target.value)}
                         className="input w-40 py-1.5 text-right text-xs"
@@ -553,7 +630,7 @@ export default function NovaAnalise() {
 
             <div className="mt-4 border-t border-slate-100 pt-3">
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={limitarRota} onChange={(e) => setLimitarRota(e.target.checked)} />
+                <input type="checkbox" disabled={!capAtiva} checked={limitarRota} onChange={(e) => setLimitarRota(e.target.checked)} />
                 <span className="text-sm font-medium text-slate-800">Limitar também o transporte por rota (frota disponível)</span>
               </label>
               {limitarRota && rotas.length > 0 && (

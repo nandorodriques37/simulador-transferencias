@@ -76,7 +76,11 @@ código — tudo vem de `ParametrosRede`.
 ### Qualidade da sugestão — o que dá para ajustar
 
 Todas essas regras vêm **desligadas por padrão** (o resultado sai igual à regra
-crua da base) e ficam na tela *Nova análise*:
+crua da base) e ficam na tela *Nova análise*. Cada grupo tem uma **chave geral**
+na barra do topo — *Teto/piso de cobertura*, *Caixa fechada e mínimos* e
+*Capacidade operacional* — mais um botão **Desligar todas as restrições**.
+Desligar não apaga nada: os valores continuam guardados e voltam a valer quando
+a chave é religada, o que torna barato comparar o plano com e sem restrição.
 
 | Regra | Para que serve | Sugestão |
 |---|---|---|
@@ -143,6 +147,11 @@ A base anexada **não precisa de nenhuma coluna de fórmula**: o app lê só as
 colunas cruas e recalcula tudo (mapa em `CAMPOS_CALCULADOS`, `lib/data/schema.ts`).
 Os cabeçalhos aceitam variações e formato pt-BR (`1.234,56`); CSV em UTF-8 ou
 latin1 é detectado automaticamente.
+
+> **Base grande? Mande CSV.** O CSV é lido em um passe direto (300 mil linhas em
+> ~1,6 s, pico de ~270 MB). XLSX e XLSB passam pelo SheetJS, que carrega a
+> planilha inteira: as mesmas 300 mil linhas levam ~18 s e passam de 1 GB de
+> memória — perto do limite de uma função serverless.
 
 ### 1. Base de CDs — origem **e** destino (obrigatória)
 

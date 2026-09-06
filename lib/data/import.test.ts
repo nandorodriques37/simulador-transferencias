@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizarAnoMes, parseBase, parseFaturamento, parsePedidos } from "./parse";
+import { detectarDelimitador, dividirLinhaCsv, tabelaDeCsv } from "./tabela";
 import { validarImportacao } from "./validate";
 
 // Cabeçalhos como saem da planilha original (com acento, espaço e ponto).
@@ -93,5 +94,59 @@ describe("validação da importação", () => {
     const { itens, diag } = parseBase([linhaBase(), linhaBase({ Deposito: 1 })]);
     const rel = validarImportacao(itens, [], diag, undefined, "pedidos");
     expect(rel.achados.some((a) => a.codigo === "pedidos_vazio")).toBe(true);
+  });
+});
+
+describe("leitura de CSV (caminho leve)", () => {
+  it("lê o cabeçalho, o delimitador e as linhas", () => {
+    const t = tabelaDeCsv("a;b;c\n1;2;3\n4;5;6\n");
+    expect(t.header).toEqual(["a", "b", "c"]);
+    expect(t.total).toBe(2);
+    const linhas: unknown[][] = [];
+    t.forEach((c) => linhas.push([...c]));
+    expect(linhas).toEqual([["1", "2", "3"], ["4", "5", "6"]]);
+  });
+
+  it("detecta vírgula e tabulação como delimitador", () => {
+    expect(detectarDelimitador("a,b,c")).toBe(",");
+    expect(detectarDelimitador("a\tb\tc")).toBe("\t");
+    expect(detectarDelimitador("a;b;c")).toBe(";");
+  });
+
+  it("respeita aspas, delimitador dentro do texto e aspas escapadas", () => {
+    expect(dividirLinhaCsv('1;"DIPIRONA; 500MG";3', ";")).toEqual(["1", "DIPIRONA; 500MG", "3"]);
+    expect(dividirLinhaCsv('1;"DIZ ""OK""";3', ";")).toEqual(["1", 'DIZ "OK"', "3"]);
+  });
+
+  it("ignora BOM, CRLF e linhas em branco", () => {
+    const t = tabelaDeCsv("﻿a;b\r\n1;2\r\n\r\n3;4\r\n");
+    expect(t.header).toEqual(["a", "b"]);
+    const linhas: unknown[][] = [];
+    t.forEach((c) => linhas.push([...c]));
+    expect(linhas).toEqual([["1", "2"], ["3", "4"]]);
+  });
+
+  it("o parser dirigido por esquema consome CSV direto", () => {
+    const csv = [
+      "Deposito;CodsemDv;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
+      "10;111;1.000,50;100;200",
+      "1;111;50;600;120",
+    ].join("\n");
+    const { itens, diag } = parseBase(tabelaDeCsv(csv));
+    expect(diag.faltando).toHaveLength(0);
+    expect(itens).toHaveLength(2);
+    expect(itens[0].estoqueDisponivel).toBeCloseTo(1000.5, 6);
+    expect(itens[1].cd).toBe(1);
+  });
+
+  it("aponta a linha exata do erro no CSV", () => {
+    const csv = [
+      "Deposito;CodsemDv;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
+      "10;111;100;100;200",
+      "10;112;-5;100;200",
+    ].join("\n");
+    const { diag } = parseBase(tabelaDeCsv(csv));
+    expect(diag.errosLinha[0].linha).toBe(3);
+    expect(diag.errosLinha[0].coluna).toBe("Estoque_DISP_CDs");
   });
 });

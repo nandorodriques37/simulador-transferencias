@@ -110,6 +110,8 @@ export type PrioridadeCapacidade = "valor" | "urgencia";
  * análise. Zero (ou ausente) significa sem limite.
  */
 export interface CapacidadeRede {
+  /** Chave geral: `false` ignora todos os limites sem apagar os valores. */
+  ativa: boolean;
   metrica: MetricaCapacidade;
   /** Limite de expedição por CD de origem (separação e embarque). */
   porOrigem: Record<number, number>;
@@ -122,7 +124,7 @@ export interface CapacidadeRede {
 }
 
 export function capacidadeVazia(): CapacidadeRede {
-  return { metrica: "unidades", porOrigem: {}, porDestino: {}, porRota: {}, prioridade: "valor" };
+  return { ativa: true, metrica: "unidades", porOrigem: {}, porDestino: {}, porRota: {}, prioridade: "valor" };
 }
 
 /** Parâmetros de uma análise de rede. */
@@ -150,6 +152,8 @@ export interface ParametrosRede {
   considerarPendenteOrigem: boolean;
 
   // --- Necessidade do destino ---------------------------------------------
+  /** Chave geral do teto/piso de cobertura (`false` ignora sem apagar). */
+  limitesCoberturaAtivos: boolean;
   /**
    * Teto de cobertura do destino, em dias (0 = sem teto). Limita a necessidade
    * a `venda_dia × dias − (disponível + pendente + trânsito)`. Protege contra
@@ -165,6 +169,8 @@ export interface ParametrosRede {
   estrategiaDestino: EstrategiaDestino;
 
   // --- Materialidade e logística ------------------------------------------
+  /** Chave geral da caixa fechada e dos mínimos (`false` ignora sem apagar). */
+  limitesEmbarqueAtivos: boolean;
   /** Transferir apenas múltiplos da embalagem de compra (caixa fechada). */
   arredondarCaixaFechada: boolean;
   /** Mínimo de unidades para a transferência de uma linha valer a pena. */
