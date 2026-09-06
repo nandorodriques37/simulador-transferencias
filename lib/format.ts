@@ -15,6 +15,10 @@ export function fmtRsCompacto(n: number): string {
   return fmtRs(n);
 }
 
+/** Capacidade: inteiro quando fecha, senão até 2 casas (2,5 paletes). */
+export const fmtCap = (n: number) =>
+  (n ?? 0).toLocaleString("pt-BR", { maximumFractionDigits: Number.isInteger(n) ? 0 : 2 });
+
 export const fmtPct = (n: number, dec = 1) =>
   `${((n ?? 0) * 100).toLocaleString("pt-BR", { maximumFractionDigits: dec })}%`;
 

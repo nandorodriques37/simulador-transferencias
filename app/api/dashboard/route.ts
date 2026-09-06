@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     cobertura,
     limiteDias: params.limiteCoberturaDias,
   });
-  const rotas = agregarRotas(linhas, params);
+  const rotas = agregarRotas(linhas, params, analise.resultado.rotas);
   const kpis = calcularKpis(linhas, rotas, {
     excessoDisponivelRs: analise.resultado.meta.excessoDisponivelRs,
     necessidadeTotalRs: analise.resultado.meta.necessidadeTotalRs,
@@ -50,6 +50,13 @@ export async function GET(req: NextRequest) {
     rotas,
     origens: agregarPorOrigem(linhas, analise.resultado.origens),
     destinos: agregarPorDestino(linhas, analise.resultado.destinos),
+    capacidade: {
+      metrica: analise.resultado.meta.metricaCapacidade,
+      qtdBloqueada: analise.resultado.meta.qtdBloqueadaPorCapacidade,
+      valorBloqueado: analise.resultado.meta.valorBloqueadoPorCapacidade,
+      skusSemFator: analise.resultado.meta.skusSemFatorCapacidade,
+      gargalos: analise.resultado.meta.gargalos,
+    },
     tempoMs: analise.resultado.meta.tempoMs,
   });
 }

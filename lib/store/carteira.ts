@@ -1,4 +1,10 @@
-import { chaveCdProduto, Compromissos, compromissosVazios, LinhaFaturamento } from "@/lib/engine/types";
+import {
+  chaveCdProduto,
+  chaveRotaProduto,
+  Compromissos,
+  compromissosVazios,
+  LinhaFaturamento,
+} from "@/lib/engine/types";
 import { RelatorioFaturamento } from "@/lib/data/validate";
 import { dbEnabled, getPool } from "@/lib/store/db";
 
@@ -322,6 +328,10 @@ export const carteira = {
       c.saidaOrigem.set(ko, (c.saidaOrigem.get(ko) ?? 0) + a.saldo);
       const kd = chaveCdProduto(a.cdDestino, a.codigoProduto);
       c.entradaDestino.set(kd, (c.entradaDestino.get(kd) ?? 0) + a.saldo);
+      // Rota + produto: o que já está aprovado também ocupa doca, frota e
+      // área de expedição na próxima análise.
+      const kr = chaveRotaProduto(a.cdOrigem, a.cdDestino, a.codigoProduto);
+      c.rotaProduto.set(kr, (c.rotaProduto.get(kr) ?? 0) + a.saldo);
     }
     return c;
   },

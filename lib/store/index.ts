@@ -1,5 +1,12 @@
 import { calcularRede, indexarPedidos } from "@/lib/engine/calc";
-import { Compromissos, LinhaBase, ParametrosRede, PedidoProjetado, ResultadoRede } from "@/lib/engine/types";
+import {
+  Compromissos,
+  compromissosVazios,
+  LinhaBase,
+  ParametrosRede,
+  PedidoProjetado,
+  ResultadoRede,
+} from "@/lib/engine/types";
 import { parametrosPadrao } from "@/lib/data/defaults";
 import { gerarBaseDemo } from "@/lib/data/seed";
 import { RelatorioQualidade } from "@/lib/data/validate";
@@ -188,7 +195,7 @@ export const store = {
     st.parametros = params;
     const compromissos: Compromissos = params.considerarAprovadas
       ? await carteira.compromissos()
-      : { saidaOrigem: new Map(), entradaDestino: new Map() };
+      : compromissosVazios();
     const idx = indexarPedidos(st.pedidos);
     const resultado = calcularRede(st.base, idx, params, compromissos);
     const analise: Analise = {

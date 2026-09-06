@@ -1,7 +1,11 @@
 import {
+  CapacidadeRede,
+  capacidadeVazia,
   chaveCdProduto,
   chavePedido,
   chaveRota,
+  chaveRotaProduto,
+  MetricaCapacidade,
   Compromissos,
   compromissosVazios,
   FiltroCobertura,
@@ -220,6 +224,142 @@ export function nivelarPorCobertura(
   return saida;
 }
 
+
+// ---------------------------------------------------------------------------
+// CAPACIDADE OPERACIONAL — o risco de sugerir mais do que a rede consegue mover
+// ---------------------------------------------------------------------------
+
+/**
+ * Quanto UMA unidade transferida consome da métrica de capacidade.
+ * Devolve 0 quando o SKU não tem o dado (aí ele não consome capacidade e é
+ * contado em `skusSemFatorCapacidade`).
+ */
+export function fatorCapacidade(l: LinhaBase, metrica: MetricaCapacidade, preco: number): number {
+  switch (metrica) {
+    case "unidades":
+      return 1;
+    case "caixas":
+      return l.embCompra > 0 ? 1 / l.embCompra : 0;
+    case "paletes":
+      return l.unidadesPorPalete && l.unidadesPorPalete > 0 ? 1 / l.unidadesPorPalete : 0;
+    case "peso":
+      return l.pesoUnitario && l.pesoUnitario > 0 ? l.pesoUnitario : 0;
+    case "volume":
+      return l.cubagemUnitaria && l.cubagemUnitaria > 0 ? l.cubagemUnitaria : 0;
+    case "valor":
+      return preco > 0 ? preco : 0;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Orçamento de capacidade da rede: expedição por origem, recebimento por
+ * destino e transporte por rota. Cada alocação consome os três ao mesmo tempo
+ * — o menor deles é o gargalo.
+ *
+ * O saldo é sempre consultado em UNIDADES do produto (converte pela métrica),
+ * porque é assim que o motor aloca.
+ */
+export class OrcamentoCapacidade {
+  readonly ativo: boolean;
+  readonly metrica: MetricaCapacidade;
+  private readonly limOrigem: number[];
+  private readonly limDestino: number[];
+  private readonly limRota: number[][];
+  private readonly usoOrigem: number[];
+  private readonly usoDestino: number[];
+  private readonly usoRota: number[][];
+  readonly compOrigem: number[];
+  readonly compDestino: number[];
+  readonly compRota: number[][];
+  readonly bloqOrigem: number[];
+  readonly bloqDestino: number[];
+  readonly bloqRota: number[][];
+
+  constructor(cap: CapacidadeRede, origens: number[], destinos: number[]) {
+    this.metrica = cap.metrica ?? "unidades";
+    const semLimite = Number.POSITIVE_INFINITY;
+    const lim = (v: number | undefined) => (v && v > 0 ? v : semLimite);
+    this.limOrigem = origens.map((cd) => lim(cap.porOrigem?.[cd]));
+    this.limDestino = destinos.map((cd) => lim(cap.porDestino?.[cd]));
+    this.limRota = origens.map((o) => destinos.map((d) => lim(cap.porRota?.[chaveRota(o, d)])));
+    this.ativo =
+      this.limOrigem.some(Number.isFinite) ||
+      this.limDestino.some(Number.isFinite) ||
+      this.limRota.some((linha) => linha.some(Number.isFinite));
+    this.usoOrigem = origens.map(() => 0);
+    this.usoDestino = destinos.map(() => 0);
+    this.usoRota = origens.map(() => destinos.map(() => 0));
+    this.compOrigem = origens.map(() => 0);
+    this.compDestino = destinos.map(() => 0);
+    this.compRota = origens.map(() => destinos.map(() => 0));
+    this.bloqOrigem = origens.map(() => 0);
+    this.bloqDestino = destinos.map(() => 0);
+    this.bloqRota = origens.map(() => destinos.map(() => 0));
+  }
+
+  /** Saldo em unidades do produto para a rota (o, d), dado o fator do SKU. */
+  disponivelUnidades(o: number, d: number, fator: number): number {
+    if (!this.ativo || fator <= 0) return Number.POSITIVE_INFINITY;
+    const saldo = Math.min(
+      this.limOrigem[o] - this.usoOrigem[o],
+      this.limDestino[d] - this.usoDestino[d],
+      this.limRota[o][d] - this.usoRota[o][d],
+    );
+    if (!Number.isFinite(saldo)) return Number.POSITIVE_INFINITY;
+    return Math.max(saldo, 0) / fator;
+  }
+
+  /** Debita a capacidade consumida por `unidades` do SKU. */
+  consumir(o: number, d: number, unidades: number, fator: number): void {
+    if (!this.ativo || fator <= 0 || unidades <= 0) return;
+    const custo = unidades * fator;
+    this.usoOrigem[o] += custo;
+    this.usoDestino[d] += custo;
+    this.usoRota[o][d] += custo;
+  }
+
+  /** Debita o que já está aprovado e ainda não faturado (ocupa doca e frota). */
+  comprometer(o: number, d: number, unidades: number, fator: number): void {
+    if (!this.ativo || fator <= 0 || unidades <= 0) return;
+    const custo = unidades * fator;
+    this.compOrigem[o] += custo;
+    this.compDestino[d] += custo;
+    this.compRota[o][d] += custo;
+    this.consumir(o, d, unidades, fator);
+  }
+
+  /** Registra as unidades barradas e por qual gargalo. */
+  registrarBloqueio(o: number, d: number, unidades: number, fator: number): void {
+    if (unidades <= 0) return;
+    const folgaO = this.limOrigem[o] - this.usoOrigem[o];
+    const folgaD = this.limDestino[d] - this.usoDestino[d];
+    const folgaR = this.limRota[o][d] - this.usoRota[o][d];
+    const menor = Math.min(folgaO, folgaD, folgaR);
+    if (!Number.isFinite(menor)) return;
+    if (menor === folgaD) this.bloqDestino[d] += unidades;
+    else if (menor === folgaO) this.bloqOrigem[o] += unidades;
+    else this.bloqRota[o][d] += unidades;
+    void fator;
+  }
+
+  limite(tipo: "origem" | "destino", i: number): number {
+    const v = tipo === "origem" ? this.limOrigem[i] : this.limDestino[i];
+    return Number.isFinite(v) ? v : 0;
+  }
+  limiteRota(o: number, d: number): number {
+    const v = this.limRota[o][d];
+    return Number.isFinite(v) ? v : 0;
+  }
+  uso(tipo: "origem" | "destino", i: number): number {
+    return tipo === "origem" ? this.usoOrigem[i] : this.usoDestino[i];
+  }
+  usoRotaDe(o: number, d: number): number {
+    return this.usoRota[o][d];
+  }
+}
+
 /** Constrói o índice de pedidos (join O(1) por chave). */
 export function indexarPedidos(
   pedidos: { anoMes: string; cdDestino: number; codigoProduto: number; pedido: number }[],
@@ -294,11 +434,18 @@ export function calcularRede(
   const minUn = params.minUnidadesLinha ?? 0;
   const minVal = params.minValorLinha ?? 0;
   const minValRota = params.minValorRota ?? 0;
+  const cap = params.capacidade ?? capacidadeVazia();
 
   const posOrigem = new Map<number, number>();
   origens.forEach((cd, i) => posOrigem.set(cd, i));
   const posDestino = new Map<number, number>();
   destinos.forEach((cd, i) => posDestino.set(cd, i));
+
+  // Orçamento operacional: expedição × recebimento × transporte.
+  const orc = new OrcamentoCapacidade(cap, origens, destinos);
+  const skusSemFator = new Set<number>();
+  let qtdBloqueadaPorCapacidade = 0;
+  let valorBloqueadoPorCapacidade = 0;
 
   // --- Agrupamento por produto (um passe pela base) --------------------------
   const porProduto = new Map<number, LinhaBase[]>();
@@ -307,6 +454,59 @@ export function calcularRede(
     const arr = porProduto.get(l.codigoProduto);
     if (arr) arr.push(l);
     else porProduto.set(l.codigoProduto, [l]);
+  }
+
+  /**
+   * Com capacidade escassa, a ORDEM em que os SKUs consomem o orçamento passa a
+   * importar: quem chega primeiro ocupa a doca. Sem limite ativo, mantém a
+   * ordem natural da base (resultado idêntico ao de antes).
+   */
+  const ordemProdutos = Array.from(porProduto.keys());
+  if (orc.ativo) {
+    const score = new Map<number, number>();
+    for (const [prod, ls] of porProduto) {
+      let v: number;
+      if (cap.prioridade === "urgencia") {
+        // Menor cobertura entre os destinos = mais urgente.
+        let pior = Infinity;
+        for (const l of ls) {
+          if (!posDestino.has(l.cd)) continue;
+          const vd = vendaDia(l);
+          const cob = vd > 0 ? (l.estoqueDisponivel + l.quantidadePendente) / vd : Infinity;
+          if (cob < pior) pior = cob;
+        }
+        v = pior === Infinity ? Number.NEGATIVE_INFINITY : -pior;
+      } else {
+        v = 0;
+        for (const l of ls) {
+          if (!posOrigem.has(l.cd)) continue;
+          v += excessoTransferivel(l, comPendente) * precoUnitario(l);
+        }
+      }
+      score.set(prod, v);
+    }
+    ordemProdutos.sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0));
+  }
+
+  // O que já foi aprovado e não faturado ocupa doca, frota e área de expedição.
+  if (orc.ativo && usarAprovadas && compromissos.rotaProduto.size > 0) {
+    for (const [chave, qtd] of compromissos.rotaProduto) {
+      if (qtd <= 0) continue;
+      const sep = chave.indexOf("|");
+      const rota = chave.slice(0, sep);
+      const prod = Number(chave.slice(sep + 1));
+      const seta = rota.indexOf(">");
+      const cdO = Number(rota.slice(0, seta));
+      const cdD = Number(rota.slice(seta + 1));
+      const io = posOrigem.get(cdO);
+      const id = posDestino.get(cdD);
+      if (io === undefined || id === undefined) continue;
+      const ls = porProduto.get(prod);
+      if (!ls) continue;
+      const lo = ls.find((l) => l.cd === cdO);
+      if (!lo) continue;
+      orc.comprometer(io, id, qtd, fatorCapacidade(lo, orc.metrica, precoUnitario(lo)));
+    }
   }
 
   const linhas: LinhaPlano[] = [];
@@ -321,6 +521,10 @@ export function calcularRede(
     sobraQtd: 0,
     sobraRs: 0,
     skusComExcesso: 0,
+    capacidadeLimite: 0,
+    capacidadeComprometida: 0,
+    capacidadeUsada: 0,
+    bloqueadoPorCapacidade: 0,
   }));
   const resumoDestino: ResumoDestino[] = destinos.map((cd, i) => ({
     cd,
@@ -332,6 +536,10 @@ export function calcularRede(
     atendidoRs: 0,
     aberto: 0,
     cobertura: 0,
+    capacidadeLimite: 0,
+    capacidadeComprometida: 0,
+    capacidadeUsada: 0,
+    bloqueadoPorCapacidade: 0,
   }));
 
   let necessidadeTotalRs = 0;
@@ -358,7 +566,8 @@ export function calcularRede(
   let processados = 0;
   const totalProdutos = porProduto.size;
 
-  for (const [codigoProduto, linhasProduto] of porProduto) {
+  for (const codigoProduto of ordemProdutos) {
+    const linhasProduto = porProduto.get(codigoProduto)!;
     processados++;
     if (opts.onProgresso && processados % progInt === 0) opts.onProgresso(processados / totalProdutos);
 
@@ -517,15 +726,33 @@ export function calcularRede(
         }
       }
 
+      // Fator de consumo do orçamento operacional para este SKU.
+      const fatorCap = orc.ativo ? fatorCapacidade(lo, orc.metrica, preco) : 0;
+      if (orc.ativo && fatorCap <= 0) skusSemFator.add(codigoProduto);
+
       if (nivelar) {
-        // Nivelamento por dias de cobertura entre os destinos elegíveis.
-        for (let d = 0; d < nDst; d++) alvoDst[d] = demandaVistaDst[d];
+        // Nivelamento por dias de cobertura, com teto de capacidade por destino.
+        let excessoRestante = excesso;
+        for (let d = 0; d < nDst; d++) {
+          const pedido = demandaVistaDst[d];
+          const capDisp = orc.disponivelUnidades(i, d, fatorCap);
+          const alvo = Math.min(pedido, capDisp);
+          alvoDst[d] = alvo;
+          const barrado = Math.min(Math.max(pedido - alvo, 0), excessoRestante);
+          if (barrado > EPS) {
+            orc.registrarBloqueio(i, d, barrado, fatorCap);
+            qtdBloqueadaPorCapacidade += barrado;
+            valorBloqueadoPorCapacidade += barrado * preco;
+          }
+        }
         const alocado = nivelarPorCobertura(alvoDst, estoqueDst, vdDst, excesso);
         for (let d = 0; d < nDst; d++) {
           const q = ajustarLote(alocado[d], regras);
           if (q <= 0) continue;
           transfDst[d] = q;
           perdaDst[d] = Math.max(alocado[d] - q, 0);
+          orc.consumir(i, d, q, fatorCap);
+          excessoRestante -= q;
           if (usaPedidos) {
             // Distribui a cota do destino do mês mais próximo para o mais distante.
             let resto = q;
@@ -539,29 +766,34 @@ export function calcularRede(
         }
       } else {
         // Prioridade estrita: mês → destino (modo pedidos) ou destino (saldo ideal).
+        // O laço é sequencial porque cada alocação muda três saldos ao mesmo
+        // tempo: o excesso da origem, a demanda do destino e a capacidade.
         const nBaldes = usaPedidos ? nMes * nDst : nDst;
-        const demandaBaldes = new Array<number>(nBaldes);
+        let saldo = excesso;
         for (let b = 0; b < nBaldes; b++) {
-          demandaBaldes[b] = usaPedidos ? demandaDstMes[b % nDst][Math.floor(b / nDst)] : demandaVistaDst[b];
-        }
-        const alocado = cascata(demandaBaldes, excesso, regras);
-        for (let b = 0; b < nBaldes; b++) {
-          if (alocado[b] <= 0) continue;
+          if (saldo <= EPS) break;
           const d = usaPedidos ? b % nDst : b;
           const m = usaPedidos ? Math.floor(b / nDst) : -1;
-          transfDst[d] += alocado[b];
-          if (m >= 0) transfDstMes[d][m] = alocado[b];
-        }
-        if (caixaFechada || minUn > 0 || minVal > 0) {
-          // O que a demanda pedia e o lote não permitiu enviar.
-          let saldo = excesso;
-          for (let b = 0; b < nBaldes; b++) {
-            const bruto = Math.min(demandaBaldes[b], saldo);
-            const d = usaPedidos ? b % nDst : b;
-            perdaDst[d] += Math.max(bruto - alocado[b], 0);
-            saldo -= alocado[b];
-            if (saldo <= EPS) break;
+          const demanda = usaPedidos ? demandaDstMes[d][m] : demandaVistaDst[d];
+          if (demanda <= EPS) continue;
+
+          const desejado = Math.min(demanda, saldo);
+          const capDisp = orc.disponivelUnidades(i, d, fatorCap);
+          const permitido = Math.min(desejado, capDisp);
+          const barrado = desejado - permitido;
+          if (barrado > EPS) {
+            orc.registrarBloqueio(i, d, barrado, fatorCap);
+            qtdBloqueadaPorCapacidade += barrado;
+            valorBloqueadoPorCapacidade += barrado * preco;
           }
+
+          const q = ajustarLote(permitido, regras);
+          perdaDst[d] += Math.max(permitido - q, 0);
+          if (q <= 0) continue;
+          transfDst[d] += q;
+          if (m >= 0) transfDstMes[d][m] = q;
+          saldo -= q;
+          orc.consumir(i, d, q, fatorCap);
         }
       }
 
@@ -679,6 +911,10 @@ export function calcularRede(
         valorImediata: 0,
         impactoFiscal: 0,
         linhas: 0,
+        capacidadeLimite: 0,
+        capacidadeComprometida: 0,
+        capacidadeUsada: 0,
+        bloqueadoPorCapacidade: 0,
       };
       rotaMap.set(l.rota, r);
     }
@@ -712,11 +948,21 @@ export function calcularRede(
     impactoFiscalTotal += l.impactoFiscal;
   }
 
-  for (const ro of resumoOrigem) {
+  for (let i = 0; i < resumoOrigem.length; i++) {
+    const ro = resumoOrigem[i];
     ro.sobraQtd = Math.max(ro.excessoQtd - ro.transferidoQtd, 0);
     ro.sobraRs = Math.max(ro.excessoRs - ro.transferidoRs, 0);
+    ro.capacidadeLimite = orc.limite("origem", i);
+    ro.capacidadeComprometida = orc.compOrigem[i];
+    ro.capacidadeUsada = orc.uso("origem", i);
+    ro.bloqueadoPorCapacidade = orc.bloqOrigem[i];
   }
-  for (const rd of resumoDestino) {
+  for (let d = 0; d < resumoDestino.length; d++) {
+    const rd = resumoDestino[d];
+    rd.capacidadeLimite = orc.limite("destino", d);
+    rd.capacidadeComprometida = orc.compDestino[d];
+    rd.capacidadeUsada = orc.uso("destino", d);
+    rd.bloqueadoPorCapacidade = orc.bloqDestino[d];
     rd.aberto = Math.max(rd.necessidadeQtd - rd.atendidoQtd, 0);
     rd.cobertura = rd.necessidadeQtd > 0 ? rd.atendidoQtd / rd.necessidadeQtd : 0;
     if (validar && rd.atendidoQtd - rd.necessidadeQtd > 1e-6) {
@@ -732,8 +978,27 @@ export function calcularRede(
       (posO.get(a.cdOrigem) ?? 99) - (posO.get(b.cdOrigem) ?? 99) ||
       (posD.get(a.cdDestino) ?? 99) - (posD.get(b.cdDestino) ?? 99),
   );
+  for (const r of rotas) {
+    const io = posOrigem.get(r.cdOrigem);
+    const id = posDestino.get(r.cdDestino);
+    if (io === undefined || id === undefined) continue;
+    r.capacidadeLimite = orc.limiteRota(io, id);
+    r.capacidadeComprometida = orc.compRota[io][id];
+    r.capacidadeUsada = orc.usoRotaDe(io, id);
+    r.bloqueadoPorCapacidade = orc.bloqRota[io][id];
+  }
   const rotasSemAliquota = rotas.filter((r) => !r.aliquotaDefinida && r.valor > 0).map((r) => r.rota);
   const excessoDisponivelRs = resumoOrigem.reduce((a, r) => a + r.excessoRs, 0);
+
+  // Gargalos: onde a capacidade barrou transferência, do maior para o menor.
+  const gargalos: { tipo: "origem" | "destino" | "rota"; id: string; bloqueado: number }[] = [];
+  for (const ro of resumoOrigem)
+    if (ro.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "origem", id: `CD ${ro.cd}`, bloqueado: ro.bloqueadoPorCapacidade });
+  for (const rd of resumoDestino)
+    if (rd.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "destino", id: `CD ${rd.cd}`, bloqueado: rd.bloqueadoPorCapacidade });
+  for (const r of rotas)
+    if (r.bloqueadoPorCapacidade > 0) gargalos.push({ tipo: "rota", id: r.rota, bloqueado: r.bloqueadoPorCapacidade });
+  gargalos.sort((a, b) => b.bloqueado - a.bloqueado);
 
   const reconciliacao: Reconciliacao = {
     skusBase: base.length,
@@ -769,6 +1034,11 @@ export function calcularRede(
       skusDistintos: skusDistintos.size,
       tempoMs: Date.now() - t0,
       rotasSemAliquota,
+      metricaCapacidade: orc.metrica,
+      qtdBloqueadaPorCapacidade,
+      valorBloqueadoPorCapacidade,
+      skusSemFatorCapacidade: skusSemFator.size,
+      gargalos,
     },
   };
 }

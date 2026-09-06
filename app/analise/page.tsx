@@ -8,6 +8,25 @@ import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
 type ModoDemanda = "saldo_ideal" | "pedidos";
 
+type MetricaCapacidade = "unidades" | "caixas" | "paletes" | "peso" | "volume" | "valor";
+
+interface CapacidadeRede {
+  metrica: MetricaCapacidade;
+  porOrigem: Record<number, number>;
+  porDestino: Record<number, number>;
+  porRota: Record<string, number>;
+  prioridade: "valor" | "urgencia";
+}
+
+const METRICAS: { valor: MetricaCapacidade; rotulo: string; unidade: string; requer?: string }[] = [
+  { valor: "unidades", rotulo: "Unidades", unidade: "un" },
+  { valor: "caixas", rotulo: "Caixas", unidade: "cx", requer: "embalagem de compra" },
+  { valor: "paletes", rotulo: "Paletes", unidade: "pallets", requer: "unidades por palete" },
+  { valor: "peso", rotulo: "Peso", unidade: "kg", requer: "peso unitário" },
+  { valor: "volume", rotulo: "Volume", unidade: "m³", requer: "cubagem unitária" },
+  { valor: "valor", rotulo: "Valor", unidade: "R$" },
+];
+
 interface Parametros {
   modoDemanda: ModoDemanda;
   origens: number[];
@@ -25,6 +44,7 @@ interface Parametros {
   minUnidadesLinha: number;
   minValorLinha: number;
   minValorRota: number;
+  capacidade: CapacidadeRede;
 }
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { baseLinhas: number; pedidosLinhas: number; cdsBase: number[]; achados: Achado[]; ok: boolean }
@@ -44,6 +64,7 @@ export default function NovaAnalise() {
   const [log, setLog] = useState<ImportLog[]>([]);
   const [msg, setMsg] = useState<{ tom: "good" | "erro" | "info"; texto: string } | null>(null);
   const [rodando, setRodando] = useState(false);
+  const [limitarRota, setLimitarRota] = useState(false);
 
   // Importação
   const [baseFile, setBaseFile] = useState<File | null>(null);
@@ -66,6 +87,24 @@ export default function NovaAnalise() {
   if (!params || !dataset) return <div className="pt-10"><Spinner label="Carregando…" /></div>;
 
   const set = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
+  const cap: CapacidadeRede = params.capacidade ?? {
+    metrica: "unidades",
+    porOrigem: {},
+    porDestino: {},
+    porRota: {},
+    prioridade: "valor",
+  };
+  const setCap = (patch: Partial<CapacidadeRede>) => set({ capacidade: { ...cap, ...patch } });
+  const setLimite = (campo: "porOrigem" | "porDestino" | "porRota", chave: number | string, valor: string) => {
+    const alvo = { ...(cap[campo] as Record<string, number>) };
+    if (valor === "" || Number(valor) <= 0) delete alvo[String(chave)];
+    else alvo[String(chave)] = Number(valor);
+    setCap({ [campo]: alvo } as Partial<CapacidadeRede>);
+  };
+  const metricaAtual = METRICAS.find((m) => m.valor === cap.metrica);
+  const unidadeCap = metricaAtual?.unidade ?? "un";
+  const temCapacidade =
+    Object.keys(cap.porOrigem ?? {}).length + Object.keys(cap.porDestino ?? {}).length + Object.keys(cap.porRota ?? {}).length > 0;
   const modoPedidos = params.modoDemanda === "pedidos";
   const rotas = params.origens.flatMap((o) => params.destinos.filter((d) => d !== o).map((d) => `${o}>${d}`));
   const mesesDisponiveis = Array.from(new Set([...dataset.mesesPedidos, ...params.horizonteMeses])).sort();
@@ -373,6 +412,7 @@ export default function NovaAnalise() {
                   {params.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura</Badge>}
                   {!params.considerarPendenteOrigem && <Badge tom="azul">Excesso físico</Badge>}
                   {params.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
+                  {temCapacidade && <Badge tom="warn">Capacidade limitada ({unidadeCap})</Badge>}
                 </div>
               </div>
             </div>
@@ -425,6 +465,139 @@ export default function NovaAnalise() {
                 <p className="mt-1 text-[11px] text-slate-500">Informe em fração: 0,052 = 5,2%. Rotas sem alíquota entram no plano, mas o impacto fiscal fica subestimado (o dashboard avisa).</p>
               </div>
             )}
+          </Secao>
+        </div>
+
+        {/* ------------------ 6. Capacidade operacional -------------- */}
+        <div className="lg:col-span-3">
+          <Secao
+            titulo="6 · Capacidade operacional"
+            desc="O limite físico da rede na janela desta análise: quanto cada CD expede, quanto recebe e quanto cada rota transporta. Deixe 0 para sem limite."
+            right={
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="block">
+                  <span className="label block">Métrica</span>
+                  <select
+                    value={cap.metrica}
+                    onChange={(e) => setCap({ metrica: e.target.value as MetricaCapacidade })}
+                    className="input mt-0.5 py-1.5 text-xs"
+                  >
+                    {METRICAS.map((m) => (
+                      <option key={m.valor} value={m.valor}>{m.rotulo} ({m.unidade})</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="label block">Com capacidade escassa, carrega primeiro</span>
+                  <select
+                    value={cap.prioridade}
+                    onChange={(e) => setCap({ prioridade: e.target.value as "valor" | "urgencia" })}
+                    className="input mt-0.5 py-1.5 text-xs"
+                  >
+                    <option value="valor">O SKU de maior valor</option>
+                    <option value="urgencia">O SKU mais urgente no destino</option>
+                  </select>
+                </label>
+              </div>
+            }
+          >
+            {metricaAtual?.requer && (
+              <div className="mb-3">
+                <Alert tom="info">
+                  A métrica <b>{metricaAtual.rotulo}</b> usa a coluna <b>{metricaAtual.requer}</b> da base. SKU sem esse
+                  dado não consome capacidade — a análise informa quantos ficaram de fora da conta.
+                </Alert>
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <div className="label mb-1.5">Expedição por origem ({unidadeCap})</div>
+                <div className="flex flex-col gap-1.5">
+                  {params.origens.map((cd) => (
+                    <label key={cd} className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-sm font-medium text-slate-700">CD {cd}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="sem limite"
+                        value={cap.porOrigem?.[cd] ?? ""}
+                        onChange={(e) => setLimite("porOrigem", cd, e.target.value)}
+                        className="input w-40 py-1.5 text-right text-xs"
+                      />
+                      <span className="text-[11px] text-slate-400">separação e embarque</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="label mb-1.5">Recebimento por destino ({unidadeCap})</div>
+                <div className="flex flex-col gap-1.5">
+                  {params.destinos.map((cd) => (
+                    <label key={cd} className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-sm font-medium text-slate-700">CD {cd}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="sem limite"
+                        value={cap.porDestino?.[cd] ?? ""}
+                        onChange={(e) => setLimite("porDestino", cd, e.target.value)}
+                        className="input w-40 py-1.5 text-right text-xs"
+                      />
+                      <span className="text-[11px] text-slate-400">docas, conferência, endereços</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={limitarRota} onChange={(e) => setLimitarRota(e.target.checked)} />
+                <span className="text-sm font-medium text-slate-800">Limitar também o transporte por rota (frota disponível)</span>
+              </label>
+              {limitarRota && rotas.length > 0 && (
+                <div className="mt-3 overflow-x-auto thin-scroll">
+                  <table className="min-w-full">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="th">Rota</th>
+                        {params.destinos.map((d) => <th key={d} className="th text-right">→ CD {d}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {params.origens.map((o) => (
+                        <tr key={o} className="border-b border-slate-100">
+                          <td className="td font-semibold">CD {o} →</td>
+                          {params.destinos.map((d) => (
+                            <td key={d} className="td text-right">
+                              {o === d ? (
+                                <span className="text-slate-300">—</span>
+                              ) : (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="sem limite"
+                                  value={cap.porRota?.[`${o}>${d}`] ?? ""}
+                                  onChange={(e) => setLimite("porRota", `${o}>${d}`, e.target.value)}
+                                  className="input w-28 py-1 text-right text-xs"
+                                />
+                              )}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <p className="mt-3 text-[11px] text-slate-500">
+              Os três limites valem ao mesmo tempo — o menor deles é o gargalo. Sugestões já aprovadas e não faturadas
+              <b> ocupam capacidade</b>, porque a doca e a frota já estão comprometidas com elas. O dashboard mostra a
+              utilização e o que ficou barrado.
+            </p>
           </Secao>
         </div>
 

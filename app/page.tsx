@@ -3,15 +3,17 @@
 import { CSSProperties, useEffect, useState } from "react";
 import Link from "next/link";
 import { Alert, Badge, Barra, Kpi, PageHeader, Secao, Spinner } from "@/components/ui";
-import { fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes, rotuloRota } from "@/lib/format";
+import { fmtCap, fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes, rotuloRota } from "@/lib/format";
 
 interface ResumoRota {
   cdOrigem: number; cdDestino: number; rota: string; aliquota: number; aliquotaDefinida: boolean;
   qtdMes: number[]; valorMes: number[]; qtd: number; valor: number;
   qtdImediata: number; valorImediata: number; impactoFiscal: number; linhas: number;
+  capacidadeLimite: number; capacidadeComprometida: number; capacidadeUsada: number; bloqueadoPorCapacidade: number;
 }
-interface ResumoOrigem { cd: number; ordem: number; excessoQtd: number; excessoRs: number; transferidoQtd: number; transferidoRs: number; sobraQtd: number; sobraRs: number; skusComExcesso: number }
-interface ResumoDestino { cd: number; ordem: number; necessidadeBrutaQtd: number; necessidadeQtd: number; necessidadeRs: number; atendidoQtd: number; atendidoRs: number; aberto: number; cobertura: number }
+interface Capacidade { capacidadeLimite: number; capacidadeComprometida: number; capacidadeUsada: number; bloqueadoPorCapacidade: number }
+interface ResumoOrigem extends Capacidade { cd: number; ordem: number; excessoQtd: number; excessoRs: number; transferidoQtd: number; transferidoRs: number; sobraQtd: number; sobraRs: number; skusComExcesso: number }
+interface ResumoDestino extends Capacidade { cd: number; ordem: number; necessidadeBrutaQtd: number; necessidadeQtd: number; necessidadeRs: number; atendidoQtd: number; atendidoRs: number; aberto: number; cobertura: number }
 interface DashResp {
   analise: { id: string; label: string; criadoEm: string; criadoPor: string; fonteBase: string };
   cobertura: "total" | "acima_limite";
@@ -33,6 +35,13 @@ interface DashResp {
     necessidadeTotalRs: number; coberturaNecessidade: number; usoDoExcesso: number;
     valorImediata: number; impactoFiscalTotal: number; linhasPlano: number;
     skusDistintos: number; rotasAtivas: number; rotasSemAliquota: string[];
+  };
+  capacidade: {
+    metrica: string;
+    qtdBloqueada: number;
+    valorBloqueado: number;
+    skusSemFator: number;
+    gargalos: { tipo: "origem" | "destino" | "rota"; id: string; bloqueado: number }[];
   };
   rotas: ResumoRota[];
   origens: ResumoOrigem[];
@@ -88,6 +97,13 @@ export default function Dashboard() {
   };
   const totalPorOrigem = (o: number) => rotas.filter((r) => r.cdOrigem === o).reduce((a, r) => a + r.valor, 0);
   const totalPorDestino = (d: number) => rotas.filter((r) => r.cdDestino === d).reduce((a, r) => a + r.valor, 0);
+  const temCapacidade =
+    origens.some((o) => o.capacidadeLimite > 0) ||
+    destinos.some((d) => d.capacidadeLimite > 0) ||
+    rotas.some((r) => r.capacidadeLimite > 0);
+  const unidadeCap = { unidades: "un", caixas: "cx", paletes: "pallets", peso: "kg", volume: "m³", valor: "R$" }[
+    data.capacidade?.metrica ?? "unidades"
+  ] ?? "un";
   const topRotas = [...rotas].sort((a, b) => b.valor - a.valor).slice(0, 8);
   const maxRota = Math.max(1, ...topRotas.map((r) => r.valor));
 
@@ -257,6 +273,100 @@ export default function Dashboard() {
           </table>
         </Secao>
       </div>
+
+      {/* ----------------------- Capacidade operacional ------------------- */}
+      {(temCapacidade || data.capacidade?.qtdBloqueada > 0) && (
+        <div className="mt-4">
+          <Secao
+            titulo="Capacidade operacional"
+            desc={`Limites de expedição, recebimento e transporte em ${unidadeCap}. Sugestões aprovadas e não faturadas já ocupam capacidade.`}
+            right={
+              data.capacidade?.qtdBloqueada > 0 ? (
+                <Badge tom="warn">
+                  {fmtInt(data.capacidade.qtdBloqueada)} un barradas · {fmtRsCompacto(data.capacidade.valorBloqueado)}
+                </Badge>
+              ) : (
+                <Badge tom="good">Nenhuma transferência barrada</Badge>
+              )
+            }
+          >
+            {data.capacidade?.gargalos?.length > 0 && (
+              <div className="mb-3">
+                <Alert tom="warn">
+                  Gargalo da rede:{" "}
+                  {data.capacidade.gargalos.slice(0, 3).map((g, i) => (
+                    <span key={g.tipo + g.id}>
+                      {i > 0 && " · "}
+                      <b>{g.tipo === "rota" ? rotuloRota(g.id) : g.id}</b> ({g.tipo}) barrou {fmtInt(g.bloqueado)} un
+                    </span>
+                  ))}
+                  . Ampliar esse ponto libera mais transferência do que mexer na ordem dos destinos.
+                </Alert>
+              </div>
+            )}
+            {data.capacidade?.skusSemFator > 0 && (
+              <div className="mb-3">
+                <Alert tom="info">
+                  {fmtInt(data.capacidade.skusSemFator)} SKU(s) sem o dado de <b>{data.capacidade.metrica}</b> na base —
+                  eles não consomem capacidade, então a utilização abaixo está subestimada.
+                </Alert>
+              </div>
+            )}
+            <div className="overflow-x-auto thin-scroll">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="th">Ponto</th>
+                    <th className="th">Papel</th>
+                    <th className="th text-right">Limite</th>
+                    <th className="th text-right">Comprometido</th>
+                    <th className="th text-right">Usado</th>
+                    <th className="th w-32">Utilização</th>
+                    <th className="th text-right">Barrado (un)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ...origens.filter((o) => o.capacidadeLimite > 0 || o.bloqueadoPorCapacidade > 0).map((o) => ({
+                      chave: `o${o.cd}`, nome: `CD ${o.cd}`, papel: "Expedição", ...o,
+                    })),
+                    ...destinos.filter((d) => d.capacidadeLimite > 0 || d.bloqueadoPorCapacidade > 0).map((d) => ({
+                      chave: `d${d.cd}`, nome: `CD ${d.cd}`, papel: "Recebimento", ...d,
+                    })),
+                    ...rotas.filter((r) => r.capacidadeLimite > 0 || r.bloqueadoPorCapacidade > 0).map((r) => ({
+                      chave: `r${r.rota}`, nome: rotuloRota(r.rota), papel: "Transporte", ...r,
+                    })),
+                  ].map((x) => {
+                    const uso = x.capacidadeLimite > 0 ? x.capacidadeUsada / x.capacidadeLimite : 0;
+                    return (
+                      <tr key={x.chave} className="border-b border-slate-100">
+                        <td className="td font-semibold">{x.nome}</td>
+                        <td className="td text-slate-500">{x.papel}</td>
+                        <td className="td num">{x.capacidadeLimite > 0 ? fmtCap(x.capacidadeLimite) : "—"}</td>
+                        <td className="td num text-slate-500">{fmtCap(x.capacidadeComprometida)}</td>
+                        <td className="td num">{fmtCap(x.capacidadeUsada)}</td>
+                        <td className="td">
+                          {x.capacidadeLimite > 0 ? (
+                            <div className="flex items-center gap-2">
+                              <Barra pct={uso} tom={uso >= 0.999 ? "brand" : "azul"} />
+                              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{fmtPct(uso, 0)}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">sem limite</span>
+                          )}
+                        </td>
+                        <td className={`td num ${x.bloqueadoPorCapacidade > 0 ? "text-amber-600" : "text-slate-400"}`}>
+                          {fmtInt(x.bloqueadoPorCapacidade)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Secao>
+        </div>
+      )}
 
       {/* --------------------------- Top rotas --------------------------- */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">

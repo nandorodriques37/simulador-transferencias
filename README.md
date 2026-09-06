@@ -62,7 +62,8 @@ código — tudo vem de `ParametrosRede`.
 | 7 | **Transferência imediata** | `MIN(transf, disp − venda média × fator)`, **rateada entre os destinos na ordem**, em caixa fechada |
 | 8 | **Cobertura** | `(disp + pendente) × 30 / venda média`, na visão do CD de origem |
 | 9 | **Impacto fiscal** | `valor transferido × alíquota da ROTA (origem → destino)` |
-| 10 | **Materialidade** | só entram no plano rotas × SKU com transferência > 0 |
+| 10 | **Capacidade operacional** | cada alocação consome três orçamentos ao mesmo tempo — expedição da origem, recebimento do destino e transporte da rota. O menor é o gargalo |
+| 11 | **Materialidade** | só entram no plano rotas × SKU com transferência > 0 |
 
 **Invariantes verificados a cada análise** (`reconciliacao`):
 - nenhuma origem envia mais que o próprio excesso;
@@ -90,6 +91,46 @@ O dashboard mostra a **necessidade bruta → considerada** por destino sempre qu
 o teto ou o piso mudou o número, e o plano exporta a coluna *não enviado por
 caixa fechada*.
 
+### Capacidade operacional — o plano cabe na operação?
+
+Um plano que sugere mais do que a rede consegue mover não é um plano, é uma
+lista de desejos. A análise aceita três limites, válidos ao mesmo tempo:
+
+| Limite | O que representa |
+|---|---|
+| **Expedição por origem** | separação, embalagem e embarque que o CD consegue produzir na janela |
+| **Recebimento por destino** | docas, conferência e endereços livres no CD que recebe |
+| **Transporte por rota** | frota/viagens disponíveis entre aquele par de CDs |
+
+Cada alocação consome os três — **o menor é o gargalo**. A capacidade é medida
+na unidade que faz sentido para a operação, e o motor converte cada unidade
+transferida usando dados do próprio SKU:
+
+| Métrica | Fator por unidade | Coluna da base |
+|---|---|---|
+| Unidades | 1 | — |
+| Caixas | 1 / embalagem de compra | `Qt_Emb_Compra` |
+| Paletes | 1 / unidades por palete | `unidades_por_palete` |
+| Peso (kg) | peso unitário | `peso_unitario` |
+| Volume (m³) | cubagem unitária | `cubagem_unitaria` |
+| Valor (R$) | preço unitário | custo/preço |
+
+As três últimas colunas são **opcionais** — a validação da importação lista
+quais métricas a sua base sustenta. SKU sem o dado da métrica escolhida não
+consome capacidade, e o resultado diz quantos ficaram nessa situação.
+
+Dois detalhes que fecham o ciclo:
+
+- **Sugestões aprovadas e não faturadas já ocupam capacidade.** A doca e a frota
+  estão comprometidas com elas; a análise seguinte só distribui o que sobra.
+- **Com capacidade escassa, a ordem dos SKUs passa a importar.** Você escolhe:
+  carregar primeiro o **de maior valor** (maximiza R$ escoado) ou o **mais
+  urgente** (menor cobertura no destino, reduz risco de ruptura).
+
+O dashboard traz um painel com limite, comprometido, usado, % de utilização e
+quanto ficou barrado em cada ponto — e nomeia o **gargalo da rede**, que é onde
+ampliar capacidade libera mais transferência do que remexer prioridades.
+
 ```bash
 npm test
 ```
@@ -116,6 +157,9 @@ latin1 é detectado automaticamente.
 | Custo de reposição / Preço de lista | `custoReposicao` / `precoLista` | — |
 | Embalagem de compra | `embCompra` | — |
 | Fornecedor · comprador · analista · categorias N1–N4 | — | — |
+| Unidades por palete | `unidadesPorPalete` | — (só para capacidade em paletes) |
+| Peso unitário (kg) | `pesoUnitario` | — (só para capacidade em peso) |
+| Cubagem unitária (m³) | `cubagemUnitaria` | — (só para capacidade em volume) |
 
 > Uma linha por **(CD, produto)**. Chave repetida bloqueia a importação.
 
@@ -159,11 +203,13 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 1. **Dashboard executivo** — KPIs (excesso disponível, transferências, cobertura
    da necessidade, impacto fiscal), **matriz origem × destino** (heatmap na
    sequência escolhida), aproveitamento por origem, cobertura por destino,
-   maiores rotas e detalhe por rota (com quebra mensal no modo pedidos).
+   **painel de capacidade com o gargalo da rede**, maiores rotas e detalhe por
+   rota (com quebra mensal no modo pedidos).
 2. **Nova análise** — upload das duas bases com validação, escolha do modo de
    demanda, **sequência de origens**, **ordem de destinos** (cada CD mostra
-   quanto tem de excesso/falta e o que já está comprometido), alíquotas por rota
-   e parâmetros. Um clique roda a análise.
+   quanto tem de excesso/falta e o que já está comprometido), alíquotas por rota,
+   regras de necessidade/materialidade e **capacidade operacional**. Um clique
+   roda a análise.
 3. **Plano de transferência** — uma linha por rota × SKU, filtros (origem,
    destino, categoria, comprador, cobertura, só imediata), busca, ordenação,
    exportação **CSV/Excel** e **aprovação** (selecionadas ou todas do filtro).
@@ -247,8 +293,9 @@ Explícitos de propósito — o motor é guloso e determinístico, não um otimi
 4. **Guloso por produto, não ótimo global.** Cada SKU é resolvido isoladamente,
    sem consolidar carga por rota nem trocar volume entre SKUs para fechar um
    caminhão.
-5. **Sem capacidade de recebimento.** O destino aceita qualquer volume dentro da
-   necessidade; não há limite de docas, paletes ou armazenagem.
+5. **Capacidade é um teto, não uma agenda.** Os limites valem para a janela
+   inteira da análise: o motor não distribui a carga ao longo dos dias nem
+   respeita janelas de recebimento por dia da semana.
 6. **Um preço por SKU/origem.** A necessidade em R$ é valorizada pelo preço da
    primeira origem com custo — se os CDs têm custos muito diferentes, o KPI de
    necessidade fica aproximado (o plano, não: cada linha usa o preço da origem).
@@ -259,7 +306,7 @@ Explícitos de propósito — o motor é guloso e determinístico, não um otimi
 ## 🔭 Próximos passos previstos
 
 Persistir as bases no Neon (staging já modelado), frete por rota e consolidação
-de carga, validade (shelf life) e lead time no horizonte, capacidade de
-recebimento, solver de otimização global como modo avançado (a cascata gulosa
-segue como padrão) e integração direta com o ERP para dispensar a importação
-manual do faturamento.
+de carga, validade (shelf life) e lead time no horizonte, capacidade por janela
+diária, solver de otimização global como modo avançado (a cascata gulosa segue
+como padrão) e integração direta com o ERP para dispensar a importação manual
+do faturamento.

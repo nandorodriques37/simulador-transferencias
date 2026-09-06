@@ -4,12 +4,15 @@ import {
   cascataCumsum,
   cobertura,
   excessoTransferivel,
+  fatorCapacidade,
   indexarPedidos,
   necessidadeSaldoIdeal,
   nivelarPorCobertura,
   precoUnitario,
 } from "./calc";
 import {
+  CapacidadeRede,
+  capacidadeVazia,
   chaveCdProduto,
   Compromissos,
   compromissosVazios,
@@ -64,6 +67,7 @@ function params(over: Partial<ParametrosRede> = {}): ParametrosRede {
     minUnidadesLinha: 0,
     minValorLinha: 0,
     minValorRota: 0,
+    capacidade: capacidadeVazia(),
     ...over,
   };
 }
@@ -529,5 +533,225 @@ describe("nivelamento por dias de cobertura", () => {
       params({ origens: [10], destinos: [1, 2], estrategiaDestino: "nivelar_cobertura", arredondarCaixaFechada: true }),
     );
     for (const l of r.linhas) expect(l.transfTotal % 30).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capacidade operacional — expedição, recebimento e transporte
+// ---------------------------------------------------------------------------
+
+const capacidade = (over: Partial<CapacidadeRede> = {}): CapacidadeRede => ({
+  ...capacidadeVazia(),
+  ...over,
+});
+
+describe("fator de conversão da capacidade", () => {
+  const l = linha(10, 100, { embCompra: 12, unidadesPorPalete: 120, pesoUnitario: 0.5, cubagemUnitaria: 0.002 });
+
+  it("converte unidades para cada métrica", () => {
+    expect(fatorCapacidade(l, "unidades", 10)).toBe(1);
+    expect(fatorCapacidade(l, "caixas", 10)).toBeCloseTo(1 / 12, 9);
+    expect(fatorCapacidade(l, "paletes", 10)).toBeCloseTo(1 / 120, 9);
+    expect(fatorCapacidade(l, "peso", 10)).toBe(0.5);
+    expect(fatorCapacidade(l, "volume", 10)).toBe(0.002);
+    expect(fatorCapacidade(l, "valor", 10)).toBe(10);
+  });
+
+  it("devolve 0 quando o SKU não tem o dado da métrica", () => {
+    const sem = linha(10, 100, { embCompra: 0 });
+    expect(fatorCapacidade(sem, "paletes", 10)).toBe(0);
+    expect(fatorCapacidade(sem, "peso", 10)).toBe(0);
+    expect(fatorCapacidade(sem, "caixas", 10)).toBe(0);
+  });
+});
+
+describe("limite de recebimento no destino", () => {
+  const b = [
+    linha(10, 100, { estoqueDisponivel: 1000 }),
+    linha(1, 100, { estoqueObjetivo: 600 }),
+    linha(2, 100, { estoqueObjetivo: 400 }),
+  ];
+
+  it("corta a transferência no teto de recebimento do CD", () => {
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ metrica: "unidades", porDestino: { 1: 250 } }) }),
+    );
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(250);
+    // O que o CD1 não pôde receber continua disponível para o CD2.
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(400);
+    const d1 = r.destinos.find((d) => d.cd === 1)!;
+    expect(d1.capacidadeLimite).toBe(250);
+    expect(d1.capacidadeUsada).toBe(250);
+    expect(d1.bloqueadoPorCapacidade).toBe(350);
+  });
+
+  it("aponta o gargalo no resultado", () => {
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porDestino: { 1: 250 } }) }),
+    );
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(350);
+    expect(r.meta.gargalos[0]).toEqual({ tipo: "destino", id: "CD 1", bloqueado: 350 });
+  });
+
+  it("sem limite, nada é barrado", () => {
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2] }));
+    expect(r.meta.qtdBloqueadaPorCapacidade).toBe(0);
+    expect(r.meta.gargalos).toHaveLength(0);
+  });
+});
+
+describe("limite de expedição e de transporte", () => {
+  it("a origem não expede além da própria capacidade", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 600 }),
+      linha(2, 100, { estoqueObjetivo: 400 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porOrigem: { 10: 500 } }) }));
+    expect(r.meta.qtdTransfTotal).toBe(500);
+    expect(r.origens[0].capacidadeUsada).toBe(500);
+    expect(r.origens[0].bloqueadoPorCapacidade).toBeGreaterThan(0);
+  });
+
+  it("o limite da rota é independente do limite do CD", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000 }),
+      linha(1, 100, { estoqueObjetivo: 600 }),
+      linha(2, 100, { estoqueObjetivo: 400 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1, 2], capacidade: capacidade({ porRota: { "10>1": 100 } }) }));
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(100);
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(400);
+    expect(r.rotas.find((x) => x.rota === "10>1")!.bloqueadoPorCapacidade).toBe(500);
+  });
+
+  it("o menor dos três limites manda", () => {
+    const b = [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, { estoqueObjetivo: 900 })];
+    const r = rodar(
+      b,
+      params({
+        origens: [10],
+        destinos: [1],
+        capacidade: capacidade({ porOrigem: { 10: 700 }, porDestino: { 1: 300 }, porRota: { "10>1": 500 } }),
+      }),
+    );
+    expect(r.meta.qtdTransfTotal).toBe(300);
+  });
+});
+
+describe("capacidade em outras métricas", () => {
+  it("mede em paletes usando as unidades por palete do SKU", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, unidadesPorPalete: 100 }),
+      linha(1, 100, { estoqueObjetivo: 900, unidadesPorPalete: 100 }),
+    ];
+    // 3 paletes = 300 unidades.
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "paletes", porDestino: { 1: 3 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(300);
+  });
+
+  it("mede em peso", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, pesoUnitario: 2 }),
+      linha(1, 100, { estoqueObjetivo: 900, pesoUnitario: 2 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "peso", porDestino: { 1: 400 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(200); // 400 kg / 2 kg
+  });
+
+  it("SKU sem o dado da métrica não consome capacidade e é sinalizado", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, unidadesPorPalete: 0 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "paletes", porDestino: { 1: 1 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(900);
+    expect(r.meta.skusSemFatorCapacidade).toBe(1);
+  });
+
+  it("capacidade em R$ limita pelo valor transferido", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, custoReposicao: 10 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(b, params({ origens: [10], destinos: [1], capacidade: capacidade({ metrica: "valor", porDestino: { 1: 2000 } }) }));
+    expect(r.linhas[0].transfSaldo).toBe(200);
+    expect(r.linhas[0].valorTotal).toBe(2000);
+  });
+});
+
+describe("capacidade escassa e prioridade entre SKUs", () => {
+  const base = [
+    linha(10, 100, { estoqueDisponivel: 500, custoReposicao: 1 }), // barato
+    linha(1, 100, { estoqueObjetivo: 500, vendaMedia3m: 300 }),
+    linha(10, 200, { estoqueDisponivel: 500, custoReposicao: 50 }), // caro
+    linha(1, 200, { estoqueObjetivo: 500, vendaMedia3m: 30 }),
+  ];
+
+  it("por valor, o SKU de maior excesso em R$ ocupa a doca primeiro", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 }, prioridade: "valor" }) }));
+    const caro = r.linhas.find((l) => l.codigoProduto === 200);
+    expect(caro?.transfSaldo).toBe(500);
+    expect(r.linhas.find((l) => l.codigoProduto === 100)).toBeUndefined();
+  });
+
+  it("por urgência, quem tem menos dias de cobertura no destino passa na frente", () => {
+    const r = rodar(base, params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 }, prioridade: "urgencia" }) }));
+    // SKU 100 vende 300/mês no CD1 e está zerado: cobertura 0 dias.
+    expect(r.linhas.find((l) => l.codigoProduto === 100)?.transfSaldo).toBe(500);
+    expect(r.linhas.find((l) => l.codigoProduto === 200)).toBeUndefined();
+  });
+});
+
+describe("capacidade e sugestões já aprovadas", () => {
+  it("o que está aprovado e não faturado já ocupa a doca do destino", () => {
+    const comp = compromissosVazios();
+    comp.rotaProduto.set("10>1|100", 200);
+    const b = [linha(10, 100, { estoqueDisponivel: 1000 }), linha(1, 100, { estoqueObjetivo: 900 })];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1], capacidade: capacidade({ porDestino: { 1: 500 } }) }),
+      [],
+      comp,
+    );
+    // 500 de capacidade − 200 já comprometidos = 300 disponíveis agora.
+    expect(r.linhas[0].transfSaldo).toBe(300);
+    expect(r.destinos[0].capacidadeComprometida).toBe(200);
+    expect(r.destinos[0].capacidadeUsada).toBe(500);
+  });
+});
+
+describe("capacidade no nivelamento e com caixa fechada", () => {
+  it("nivelando, o destino sem capacidade não recebe e o outro absorve", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 600 }),
+      linha(1, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+      linha(2, 100, { estoqueObjetivo: 600, vendaMedia3m: 300 }),
+    ];
+    const r = rodar(
+      b,
+      params({
+        origens: [10],
+        destinos: [1, 2],
+        estrategiaDestino: "nivelar_cobertura",
+        capacidade: capacidade({ porDestino: { 1: 100 } }),
+      }),
+    );
+    expect(r.linhas.find((l) => l.cdDestino === 1)!.transfSaldo).toBe(100);
+    expect(r.linhas.find((l) => l.cdDestino === 2)!.transfSaldo).toBe(500);
+  });
+
+  it("o corte por capacidade respeita a caixa fechada", () => {
+    const b = [
+      linha(10, 100, { estoqueDisponivel: 1000, embCompra: 12 }),
+      linha(1, 100, { estoqueObjetivo: 900 }),
+    ];
+    const r = rodar(
+      b,
+      params({ origens: [10], destinos: [1], arredondarCaixaFechada: true, capacidade: capacidade({ porDestino: { 1: 250 } }) }),
+    );
+    expect(r.linhas[0].transfSaldo).toBe(240); // 20 caixas, não 250 unidades
   });
 });

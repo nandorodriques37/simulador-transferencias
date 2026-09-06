@@ -4,13 +4,20 @@ import { chaveRota, LinhaPlano, ParametrosRede, ResumoDestino, ResumoOrigem, Res
  * Reagrega as rotas (origem → destino) a partir de um subconjunto de linhas do
  * plano (ex.: depois do filtro de cobertura). Mantém a mesma semântica do motor.
  */
-export function agregarRotas(linhas: LinhaPlano[], params: ParametrosRede): ResumoRota[] {
+export function agregarRotas(
+  linhas: LinhaPlano[],
+  params: ParametrosRede,
+  rotasBase: ResumoRota[] = [],
+): ResumoRota[] {
+  // A leitura de capacidade vem do cálculo (é da análise inteira, não do filtro).
+  const capPorRota = new Map(rotasBase.map((r) => [r.rota, r]));
   const nMes = params.modoDemanda === "pedidos" ? params.horizonteMeses.length : 0;
   const map = new Map<string, ResumoRota>();
   for (const l of linhas) {
     const rota = chaveRota(l.cdOrigem, l.cdDestino);
     let r = map.get(rota);
     if (!r) {
+      const base = capPorRota.get(rota);
       r = {
         cdOrigem: l.cdOrigem,
         cdDestino: l.cdDestino,
@@ -25,6 +32,10 @@ export function agregarRotas(linhas: LinhaPlano[], params: ParametrosRede): Resu
         valorImediata: 0,
         impactoFiscal: 0,
         linhas: 0,
+        capacidadeLimite: base?.capacidadeLimite ?? 0,
+        capacidadeComprometida: base?.capacidadeComprometida ?? 0,
+        capacidadeUsada: base?.capacidadeUsada ?? 0,
+        bloqueadoPorCapacidade: base?.bloqueadoPorCapacidade ?? 0,
       };
       map.set(rota, r);
     }

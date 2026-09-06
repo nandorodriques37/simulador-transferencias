@@ -52,6 +52,11 @@ export const SCHEMA_BASE: ColSpec[] = [
   { campo: "monitorado", rotulo: "Monitorado", aliases: ["Monitorado", "monitorado"], required: false, tipo: "str" },
   { campo: "marcaPropria", rotulo: "Marca própria", aliases: ["MARCA_PROPRIA", "marca_propria", "marcaPropria"], required: false, tipo: "str" },
   { campo: "leadTime", rotulo: "Lead time", aliases: ["LeadTimeReal", "lead_time", "leadTime"], required: false, tipo: "num" },
+  // Fatores logísticos — opcionais, usados só quando a capacidade operacional
+  // é medida em paletes, peso ou volume.
+  { campo: "unidadesPorPalete", rotulo: "Unidades por palete", aliases: ["unidades_por_palete", "un_por_palete", "unidadesPorPalete", "qt_palete", "qtd_palete", "palete", "lastro_altura"], required: false, tipo: "num", naoNegativo: true },
+  { campo: "pesoUnitario", rotulo: "Peso unitário (kg)", aliases: ["peso_unitario", "pesoUnitario", "peso", "peso_kg", "peso_bruto", "peso_liquido"], required: false, tipo: "num", naoNegativo: true },
+  { campo: "cubagemUnitaria", rotulo: "Cubagem unitária (m³)", aliases: ["cubagem_unitaria", "cubagemUnitaria", "cubagem", "volume_m3", "m3", "volume"], required: false, tipo: "num", naoNegativo: true },
 ];
 
 // --- 2) Base de pedidos projetados (DRP) ------------------------------------

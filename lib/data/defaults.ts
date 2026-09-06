@@ -1,4 +1,4 @@
-import { ParametrosRede } from "@/lib/engine/types";
+import { capacidadeVazia, ParametrosRede } from "@/lib/engine/types";
 
 /** Retorna 'AAAA_MM' para o mês corrente + offset. */
 export function mesOffset(offset: number, base = new Date()): string {
@@ -50,5 +50,7 @@ export function parametrosPadrao(base = new Date()): ParametrosRede {
     minUnidadesLinha: 0,
     minValorLinha: 0,
     minValorRota: 0,
+    // Capacidade operacional: sem limites por padrão.
+    capacidade: capacidadeVazia(),
   };
 }

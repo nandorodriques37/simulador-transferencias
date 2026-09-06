@@ -1,4 +1,37 @@
-import { ParametrosRede } from "@/lib/engine/types";
+import {
+  CapacidadeRede,
+  capacidadeVazia,
+  MetricaCapacidade,
+  ParametrosRede,
+  PrioridadeCapacidade,
+} from "@/lib/engine/types";
+
+const METRICAS: MetricaCapacidade[] = ["unidades", "caixas", "paletes", "peso", "volume", "valor"];
+
+/** Normaliza os limites de capacidade: descarta valores inválidos e <= 0. */
+function normalizarCapacidade(bruta: Partial<CapacidadeRede> | undefined): CapacidadeRede {
+  const base = capacidadeVazia();
+  if (!bruta) return base;
+  const positivos = (r: Record<string | number, unknown> | undefined) => {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(r ?? {})) {
+      const n = Number(v);
+      if (!isNaN(n) && n > 0) out[k] = n;
+    }
+    return out;
+  };
+  const metrica = METRICAS.includes(bruta.metrica as MetricaCapacidade)
+    ? (bruta.metrica as MetricaCapacidade)
+    : "unidades";
+  const prioridade: PrioridadeCapacidade = bruta.prioridade === "urgencia" ? "urgencia" : "valor";
+  return {
+    metrica,
+    prioridade,
+    porOrigem: positivos(bruta.porOrigem) as unknown as Record<number, number>,
+    porDestino: positivos(bruta.porDestino) as unknown as Record<number, number>,
+    porRota: positivos(bruta.porRota),
+  };
+}
 
 /**
  * Valida e normaliza os parâmetros de uma análise vindos da UI.
@@ -59,6 +92,7 @@ export function normalizarParametros(
       minUnidadesLinha: num(body.minUnidadesLinha),
       minValorLinha: num(body.minValorLinha),
       minValorRota: num(body.minValorRota),
+      capacidade: normalizarCapacidade(body.capacidade),
     },
   };
 }

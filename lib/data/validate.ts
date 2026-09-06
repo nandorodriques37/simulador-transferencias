@@ -150,6 +150,25 @@ export function validarImportacao(
       add({ nivel: "aviso", codigo: "cd_pedido_fora_base", mensagem: "CDs presentes na base de pedidos que não existem na base de CDs.", qtd: foraDaBase.length, exemplos: foraDaBase.map((c) => `CD ${c}`) });
   }
 
+  // Fatores logísticos disponíveis — habilitam as métricas de capacidade.
+  if (base.length > 0) {
+    const comPalete = base.filter((l) => (l.unidadesPorPalete ?? 0) > 0).length;
+    const comPeso = base.filter((l) => (l.pesoUnitario ?? 0) > 0).length;
+    const comCubagem = base.filter((l) => (l.cubagemUnitaria ?? 0) > 0).length;
+    const disponiveis = ["unidades", "valor"];
+    if (base.some((l) => l.embCompra > 0)) disponiveis.push("caixas");
+    if (comPalete) disponiveis.push(`paletes (${comPalete} SKUs)`);
+    if (comPeso) disponiveis.push(`peso (${comPeso} SKUs)`);
+    if (comCubagem) disponiveis.push(`volume (${comCubagem} SKUs)`);
+    add({
+      nivel: "info",
+      codigo: "metricas_capacidade",
+      mensagem: "Métricas de capacidade operacional que esta base sustenta.",
+      qtd: disponiveis.length,
+      exemplos: disponiveis,
+    });
+  }
+
   const ok = !achados.some((a) => a.nivel === "erro");
   return { baseLinhas: base.length, pedidosLinhas: pedidos.length, cdsBase, diagBase, diagPedidos, achados, ok };
 }

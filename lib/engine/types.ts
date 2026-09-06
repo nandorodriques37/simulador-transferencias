@@ -37,6 +37,12 @@ export interface LinhaBase {
   monitorado?: string;
   marcaPropria?: string;
   leadTime?: number;
+  /** Unidades por palete — usado quando a capacidade é medida em paletes. */
+  unidadesPorPalete?: number;
+  /** Peso unitário (kg) — usado quando a capacidade é medida em peso. */
+  pesoUnitario?: number;
+  /** Cubagem unitária (m³) — usada quando a capacidade é medida em volume. */
+  cubagemUnitaria?: number;
 }
 
 /** 1 linha por (ano_mes, cd_destino, codigo_produto). Base de PEDIDOS. */
@@ -72,6 +78,52 @@ export type ModoDemanda = "saldo_ideal" | "pedidos";
  *   destinos (water-filling), evitando que o último da fila fique em ruptura.
  */
 export type EstrategiaDestino = "prioridade" | "nivelar_cobertura";
+
+/**
+ * Unidade em que a capacidade operacional é medida. O motor converte cada
+ * unidade transferida para essa métrica usando os dados do próprio SKU:
+ *
+ * | métrica    | fator por unidade transferida        | vem de              |
+ * |------------|--------------------------------------|---------------------|
+ * | unidades   | 1                                    | —                   |
+ * | caixas     | 1 / embalagem de compra              | `embCompra`         |
+ * | paletes    | 1 / unidades por palete              | `unidadesPorPalete` |
+ * | peso       | peso unitário (kg)                   | `pesoUnitario`      |
+ * | volume     | cubagem unitária (m³)                | `cubagemUnitaria`   |
+ * | valor      | preço unitário (R$)                  | custo/preço         |
+ *
+ * SKU sem o dado da métrica escolhida não consome capacidade (e o resultado
+ * informa quantos SKUs ficaram nessa situação).
+ */
+export type MetricaCapacidade = "unidades" | "caixas" | "paletes" | "peso" | "volume" | "valor";
+
+/**
+ * Quando a capacidade é escassa, qual SKU carrega primeiro:
+ * - "valor": o de maior valor de excesso (maximiza R$ escoado);
+ * - "urgencia": o de menor cobertura no destino (reduz risco de ruptura).
+ */
+export type PrioridadeCapacidade = "valor" | "urgencia";
+
+/**
+ * Capacidade operacional da rede — o limite físico de quanto cada CD consegue
+ * EXPEDIR e RECEBER, e de quanto cada rota consegue transportar na janela da
+ * análise. Zero (ou ausente) significa sem limite.
+ */
+export interface CapacidadeRede {
+  metrica: MetricaCapacidade;
+  /** Limite de expedição por CD de origem (separação e embarque). */
+  porOrigem: Record<number, number>;
+  /** Limite de recebimento por CD de destino (docas, conferência, endereços). */
+  porDestino: Record<number, number>;
+  /** Limite de transporte por rota `origem>destino` (frota disponível). */
+  porRota: Record<string, number>;
+  /** Ordem em que os SKUs consomem a capacidade escassa. */
+  prioridade: PrioridadeCapacidade;
+}
+
+export function capacidadeVazia(): CapacidadeRede {
+  return { metrica: "unidades", porOrigem: {}, porDestino: {}, porRota: {}, prioridade: "valor" };
+}
 
 /** Parâmetros de uma análise de rede. */
 export interface ParametrosRede {
@@ -121,6 +173,10 @@ export interface ParametrosRede {
   minValorLinha: number;
   /** Mínimo em R$ para a ROTA inteira entrar no plano (carga mínima). */
   minValorRota: number;
+
+  // --- Capacidade operacional ---------------------------------------------
+  /** Limites de expedição, recebimento e transporte. */
+  capacidade: CapacidadeRede;
 }
 
 /** Chave de rota origem→destino. */
@@ -151,10 +207,20 @@ export interface Compromissos {
   saidaOrigem: Map<string, number>;
   /** `${cd}|${produto}` -> unidades já a caminho daquele CD (trânsito). */
   entradaDestino: Map<string, number>;
+  /**
+   * `${origem}>${destino}|${produto}` -> unidades já aprovadas naquela rota.
+   * Usado para debitar a capacidade operacional já comprometida.
+   */
+  rotaProduto: Map<string, number>;
 }
 
 export function compromissosVazios(): Compromissos {
-  return { saidaOrigem: new Map(), entradaDestino: new Map() };
+  return { saidaOrigem: new Map(), entradaDestino: new Map(), rotaProduto: new Map() };
+}
+
+/** Chave (rota, produto) usada nos compromissos. */
+export function chaveRotaProduto(cdOrigem: number, cdDestino: number, codigoProduto: number): string {
+  return `${cdOrigem}>${cdDestino}|${codigoProduto}`;
 }
 
 /** Uma linha do plano: rota (origem → destino) × SKU, com transferência > 0. */
@@ -210,6 +276,11 @@ export interface ResumoRota {
   valorImediata: number;
   impactoFiscal: number;
   linhas: number;
+  /** Capacidade de transporte da rota: limite, comprometido e usado. */
+  capacidadeLimite: number;
+  capacidadeComprometida: number;
+  capacidadeUsada: number;
+  bloqueadoPorCapacidade: number;
 }
 
 /** Agregado por CD de origem (o quanto cada origem conseguiu escoar). */
@@ -223,6 +294,12 @@ export interface ResumoOrigem {
   sobraQtd: number;
   sobraRs: number;
   skusComExcesso: number;
+  /** Capacidade de expedição: limite, já comprometido e usado nesta análise. */
+  capacidadeLimite: number;
+  capacidadeComprometida: number;
+  capacidadeUsada: number;
+  /** Unidades que a demanda pedia e a capacidade de expedição barrou. */
+  bloqueadoPorCapacidade: number;
 }
 
 /** Agregado por CD de destino (o quanto da necessidade foi coberto). */
@@ -237,6 +314,12 @@ export interface ResumoDestino {
   atendidoRs: number;
   aberto: number; // necessidade não atendida (qtd)
   cobertura: number; // atendidoQtd / necessidadeQtd (0..1)
+  /** Capacidade de recebimento: limite, já comprometido e usado nesta análise. */
+  capacidadeLimite: number;
+  capacidadeComprometida: number;
+  capacidadeUsada: number;
+  /** Unidades que a demanda pedia e a capacidade de recebimento barrou. */
+  bloqueadoPorCapacidade: number;
 }
 
 export interface Reconciliacao {
@@ -272,6 +355,15 @@ export interface ResultadoRede {
     skusDistintos: number;
     tempoMs: number;
     rotasSemAliquota: string[]; // rotas com transferência e sem alíquota definida
+    /** Métrica usada nos limites de capacidade desta análise. */
+    metricaCapacidade: MetricaCapacidade;
+    /** Unidades barradas por falta de capacidade (expedição, recebimento ou rota). */
+    qtdBloqueadaPorCapacidade: number;
+    valorBloqueadoPorCapacidade: number;
+    /** SKUs sem o dado da métrica escolhida (não consomem capacidade). */
+    skusSemFatorCapacidade: number;
+    /** Gargalos identificados: onde a capacidade barrou transferência. */
+    gargalos: { tipo: "origem" | "destino" | "rota"; id: string; bloqueado: number }[];
   };
 }
 

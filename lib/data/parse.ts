@@ -163,6 +163,9 @@ export function parseBase(rows: Record<string, unknown>[]): { itens: LinhaBase[]
       monitorado: str(o.monitorado),
       marcaPropria: str(o.marcaPropria),
       leadTime: Number(o.leadTime) || 0,
+      unidadesPorPalete: Number(o.unidadesPorPalete) || 0,
+      pesoUnitario: Number(o.pesoUnitario) || 0,
+      cubagemUnitaria: Number(o.cubagemUnitaria) || 0,
     };
   });
   return { itens: out, diag };
