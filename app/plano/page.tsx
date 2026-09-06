@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Alert, Badge, PageHeader, Spinner } from "@/components/ui";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Alert, Badge, ErroCarga, PageHeader, Revalidando, Spinner } from "@/components/ui";
 import { fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes } from "@/lib/format";
+import { useApi, useDebounce } from "@/lib/useApi";
 
 interface LinhaPlano {
   cdOrigem: number; cdDestino: number; rota: string; codigoProduto: number; produto: string;
@@ -32,16 +34,61 @@ const FILTROS_INICIAIS: Record<string, string> = {
   comprador: "", analista: "", status: "", q: "", soImediata: "false",
 };
 
-export default function Plano() {
-  const [filtros, setFiltros] = useState<Record<string, string>>(FILTROS_INICIAIS);
-  const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<{ campo: string; dir: "asc" | "desc" }>({ campo: "valorTotal", dir: "desc" });
-  const [data, setData] = useState<PlanoResp | null>(null);
-  const [loading, setLoading] = useState(true);
+/** Valores que não precisam aparecer na URL — são o padrão da tela. */
+const PADROES: Record<string, string> = { ...FILTROS_INICIAIS, sort: "valorTotal", dir: "desc", page: "1" };
+
+export default function PlanoPage() {
+  // `useSearchParams` exige Suspense no Next 14 (a página é renderizada no cliente).
+  return (
+    <Suspense fallback={<div className="pt-10"><Spinner label="Carregando plano…" /></div>}>
+      <Plano />
+    </Suspense>
+  );
+}
+
+function Plano() {
+  const router = useRouter();
+  const url = useSearchParams();
+
+  // A URL é a fonte da verdade dos filtros: recarregar a página preserva a
+  // visão, e o link filtrado pode ser mandado para outra pessoa.
+  const filtros = useMemo(() => {
+    const f = { ...FILTROS_INICIAIS };
+    for (const k of Object.keys(FILTROS_INICIAIS)) {
+      const v = url.get(k);
+      if (v !== null) f[k] = v;
+    }
+    return f;
+  }, [url]);
+  const page = Math.max(1, Number(url.get("page") ?? 1));
+  const sort = {
+    campo: url.get("sort") ?? "valorTotal",
+    dir: (url.get("dir") as "asc" | "desc") ?? "desc",
+  };
+
+  const [busca, setBusca] = useState(filtros.q);
+  const buscaDebounced = useDebounce(busca, 300);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<{ tom: "good" | "erro"; texto: string } | null>(null);
   const [aprovando, setAprovando] = useState(false);
   const [recalculando, setRecalculando] = useState(false);
+
+  const aplicar = (patch: Record<string, string>, resetPagina = true) => {
+    const p = new URLSearchParams(url.toString());
+    for (const [k, v] of Object.entries(patch)) {
+      if (!v || v === PADROES[k]) p.delete(k);
+      else p.set(k, v);
+    }
+    if (resetPagina) p.delete("page");
+    router.replace(`/plano${p.toString() ? `?${p}` : ""}`, { scroll: false });
+    setSel(new Set());
+  };
+
+  // A busca só entra na URL depois da pausa — uma requisição por termo, não por tecla.
+  useEffect(() => {
+    if (buscaDebounced !== filtros.q) aplicar({ q: buscaDebounced });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buscaDebounced]);
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -51,13 +98,11 @@ export default function Plano() {
     p.set("sort", sort.campo);
     p.set("dir", sort.dir);
     return p.toString();
-  }, [filtros, page, sort]);
+  }, [filtros, page, sort.campo, sort.dir]);
 
-  const carregar = useCallback(() => {
-    setLoading(true);
-    fetch(`/api/plano?${qs}`).then((r) => r.json()).then(setData).finally(() => setLoading(false));
-  }, [qs]);
-  useEffect(carregar, [carregar]);
+  const api = useApi<PlanoResp>(`/api/plano?${qs}`);
+  const data = api.data;
+  const carregar = api.recarregar;
 
   const recalcular = async () => {
     if (!data?.parametros) return;
@@ -75,12 +120,15 @@ export default function Plano() {
         return;
       }
       carregar();
+    } catch (e) {
+      setMsg({ tom: "erro", texto: `Não foi possível recalcular: ${(e as Error).message}` });
     } finally {
       setRecalculando(false);
     }
   };
 
-  if (loading && !data) return <div className="pt-10"><Spinner label="Carregando plano…" /></div>;
+  if (api.carregando) return <div className="pt-10"><Spinner label="Carregando plano…" /></div>;
+  if (api.erro && !data) return <ErroCarga erro={api.erro} onTentar={api.recarregar} />;
   if (!data) return null;
 
   // O detalhe por SKU não é persistido: quando a instância está fria, o
@@ -122,9 +170,10 @@ export default function Plano() {
   const { itens, facets, meses, totaisFiltro } = data;
   const modoPedidos = data.modoDemanda === "pedidos";
   const chave = (l: LinhaPlano) => `${l.rota}|${l.codigoProduto}`;
-  const setF = (k: string, v: string) => { setFiltros((f) => ({ ...f, [k]: v })); setPage(1); setSel(new Set()); };
+  const setF = (k: string, v: string) => aplicar({ [k]: v });
   const ordenar = (campo: string) =>
-    setSort((s) => ({ campo, dir: s.campo === campo && s.dir === "desc" ? "asc" : "desc" }));
+    aplicar({ sort: campo, dir: sort.campo === campo && sort.dir === "desc" ? "asc" : "desc" });
+  const irPara = (p: number) => aplicar({ page: String(Math.max(1, p)) }, false);
 
   const alternar = (k: string) => {
     const novo = new Set(sel);
@@ -153,16 +202,31 @@ export default function Plano() {
       });
       setSel(new Set());
       carregar();
+    } catch (e) {
+      setMsg({ tom: "erro", texto: `Falha ao aprovar: ${(e as Error).message}. Nenhuma linha foi para a carteira.` });
     } finally {
       setAprovando(false);
     }
   };
 
-  const th = (campo: string, rotulo: string, extra = "") => (
-    <th className={`thc cursor-pointer select-none hover:text-slate-800 ${extra}`} onClick={() => ordenar(campo)}>
-      {rotulo}{sort.campo === campo ? (sort.dir === "desc" ? " ↓" : " ↑") : ""}
-    </th>
-  );
+  // Cabeçalho ordenável como <button>: alcançável por teclado e anunciado pelo
+  // leitor de tela — o <th onClick> anterior não era nem uma coisa nem outra.
+  const th = (campo: string, rotulo: string, extra = "") => {
+    const ativo = sort.campo === campo;
+    return (
+      <th scope="col" className={`thc ${extra}`} aria-sort={ativo ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}>
+        <button
+          type="button"
+          onClick={() => ordenar(campo)}
+          className="inline-flex items-center gap-0.5 uppercase tracking-wide hover:text-slate-800"
+          title={`Ordenar por ${rotulo}`}
+        >
+          {rotulo}
+          <span aria-hidden>{ativo ? (sort.dir === "desc" ? " ↓" : " ↑") : ""}</span>
+        </button>
+      </th>
+    );
+  };
 
   return (
     <div>
@@ -189,7 +253,7 @@ export default function Plano() {
         <div className="flex flex-wrap items-end gap-2">
           <div>
             <div className="label mb-0.5">Buscar</div>
-            <input value={filtros.q} onChange={(e) => setF("q", e.target.value)} placeholder="produto ou código" className="input w-48 py-1.5 text-xs" />
+            <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="produto ou código" className="input w-48 py-1.5 text-xs" />
           </div>
           <div>
             <div className="label mb-0.5">Origem</div>
@@ -230,7 +294,13 @@ export default function Plano() {
             <input type="checkbox" checked={filtros.soImediata === "true"} onChange={(e) => setF("soImediata", String(e.target.checked))} />
             Só com saída imediata
           </label>
-          <button onClick={() => { setFiltros(FILTROS_INICIAIS); setPage(1); }} className="btn-ghost py-1.5 text-xs">Limpar</button>
+          <button
+            onClick={() => { setBusca(""); router.replace("/plano", { scroll: false }); setSel(new Set()); }}
+            className="btn-ghost py-1.5 text-xs"
+          >
+            Limpar
+          </button>
+          <div className="pb-1.5"><Revalidando ativo={api.revalidando} /></div>
         </div>
 
         <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
@@ -254,25 +324,28 @@ export default function Plano() {
       {/* ------------------------------- Tabela ------------------------------ */}
       <div className="card overflow-x-auto thin-scroll">
         <table className="min-w-full">
+          <caption className="sr-only">
+            Plano de transferência: uma linha por rota e SKU, {fmtInt(data.total)} linhas no filtro atual.
+          </caption>
           <thead className="sticky top-0 bg-white shadow-[0_1px_0_0_#e2e8f0]">
             <tr>
-              <th className="thc w-8">
+              <th scope="col" className="thc w-8">
                 <input type="checkbox" checked={itens.length > 0 && itens.every((l) => sel.has(chave(l)))} onChange={alternarTodas} />
               </th>
               {th("rota", "Rota")}
               {th("codigoProduto", "Código")}
               {th("produto", "Produto")}
-              <th className="thc">Categoria</th>
+              <th scope="col" className="thc">Categoria</th>
               {modoPedidos
-                ? meses.map((m) => <th key={m} className="thc text-right">Transf. {rotuloMes(m)}</th>)
-                : <th className="thc text-right">Necessidade</th>}
+                ? meses.map((m) => <th key={m} scope="col" className="thc text-right">Transf. {rotuloMes(m)}</th>)
+                : <th scope="col" className="thc text-right">Necessidade</th>}
               {th("transfTotal", "Qtd total", "text-right")}
-              <th className="thc text-right">Cx</th>
+              <th scope="col" className="thc text-right">Cx</th>
               {th("qtdImediataArredondada", "Imediata (un)", "text-right")}
               {th("valorTotal", "Valor", "text-right")}
               {th("impactoFiscal", "Fiscal", "text-right")}
               {th("coberturaDias", "Cob. origem", "text-right")}
-              <th className="thc">Carteira</th>
+              <th scope="col" className="thc">Carteira</th>
             </tr>
           </thead>
           <tbody>
@@ -308,8 +381,8 @@ export default function Plano() {
       <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
         <div>Página {data.page} de {data.totalPaginas} · {fmtInt(data.total)} linhas · imediata cobre {fmtPct(totaisFiltro.valor > 0 ? totaisFiltro.imediata / totaisFiltro.valor : 0, 0)} do valor</div>
         <div className="flex gap-2">
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={data.page <= 1} className="btn-ghost py-1 text-xs">Anterior</button>
-          <button onClick={() => setPage((p) => p + 1)} disabled={data.page >= data.totalPaginas} className="btn-ghost py-1 text-xs">Próxima</button>
+          <button onClick={() => irPara(page - 1)} disabled={data.page <= 1} className="btn-ghost py-1 text-xs">Anterior</button>
+          <button onClick={() => irPara(page + 1)} disabled={data.page >= data.totalPaginas} className="btn-ghost py-1 text-xs">Próxima</button>
         </div>
       </div>
     </div>

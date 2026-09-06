@@ -1,9 +1,10 @@
 "use client";
 
-import { CSSProperties, useEffect, useState } from "react";
+import { CSSProperties, useState } from "react";
 import Link from "next/link";
-import { Alert, Badge, Barra, Kpi, PageHeader, Secao, Spinner } from "@/components/ui";
+import { Alert, Badge, Barra, ErroCarga, Kpi, PageHeader, Revalidando, Secao, Spinner } from "@/components/ui";
 import { fmtCap, fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes, rotuloRota } from "@/lib/format";
+import { useApi } from "@/lib/useApi";
 
 interface ResumoRota {
   cdOrigem: number; cdDestino: number; rota: string; aliquota: number; aliquotaDefinida: boolean;
@@ -64,30 +65,14 @@ interface AnaliseHistorico {
 
 export default function Dashboard() {
   const [cobertura, setCobertura] = useState<"total" | "acima_limite">("total");
-  const [data, setData] = useState<DashResp | null>(null);
-  const [historico, setHistorico] = useState<AnaliseHistorico[]>([]);
-  const [duravel, setDuravel] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const painel = useApi<DashResp>(`/api/dashboard?cobertura=${cobertura}`);
+  const hist = useApi<{ analises: AnaliseHistorico[]; duravel: boolean }>("/api/analise");
+  const data = painel.data;
+  const historico = hist.data?.analises ?? [];
+  const duravel = !!hist.data?.duravel;
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/dashboard?cobertura=${cobertura}`)
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false));
-  }, [cobertura]);
-
-  useEffect(() => {
-    fetch("/api/analise")
-      .then((r) => r.json())
-      .then((d) => {
-        setHistorico(d.analises ?? []);
-        setDuravel(!!d.duravel);
-      })
-      .catch(() => undefined);
-  }, [data?.analise?.id]);
-
-  if (loading && !data) return <div className="pt-10"><Spinner label="Carregando painel…" /></div>;
+  if (painel.carregando) return <div className="pt-10"><Spinner label="Carregando painel…" /></div>;
+  if (painel.erro && !data) return <ErroCarga erro={painel.erro} onTentar={painel.recarregar} />;
   if (!data) return null;
 
   if (data.semAnalise || data.erro) {
@@ -147,6 +132,7 @@ export default function Dashboard() {
         }
         right={
           <div className="flex items-center gap-2">
+            <Revalidando ativo={painel.revalidando} />
             <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
               <button onClick={() => setCobertura("total")} className={`rounded-md px-3 py-1.5 ${cobertura === "total" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Total</button>
               <button onClick={() => setCobertura("acima_limite")} className={`rounded-md px-3 py-1.5 ${cobertura === "acima_limite" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Estoque parado</button>
@@ -155,6 +141,15 @@ export default function Dashboard() {
           </div>
         }
       />
+
+      {painel.erro && (
+        <div className="mb-4">
+          <Alert tom="erro">
+            Falha ao atualizar o painel ({painel.erro}) — os números abaixo são da última carga bem-sucedida.{" "}
+            <button onClick={painel.recarregar} className="underline">Tentar de novo</button>
+          </Alert>
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap gap-1.5">
         <Badge tom="azul">Origens: {data.sequenciaOrigens.map((c) => `CD${c}`).join(" → ")}</Badge>
@@ -256,9 +251,10 @@ export default function Dashboard() {
         </Secao>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
         {/* --------------------------- Origens --------------------------- */}
         <Secao titulo="Origens — quanto do excesso escoou" desc="Na ordem de análise. O que sobra continua parado no CD.">
+          <div className="overflow-x-auto thin-scroll">
           <table className="min-w-full">
             <thead>
               <tr className="border-b border-slate-200">
@@ -287,10 +283,12 @@ export default function Dashboard() {
               })}
             </tbody>
           </table>
+          </div>
         </Secao>
 
         {/* -------------------------- Destinos --------------------------- */}
         <Secao titulo="Destinos — quanto da necessidade foi coberto" desc="Na ordem de prioridade. O aberto segue para a próxima análise.">
+          <div className="overflow-x-auto thin-scroll">
           <table className="min-w-full">
             <thead>
               <tr className="border-b border-slate-200">
@@ -323,6 +321,7 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
+          </div>
         </Secao>
       </div>
 
@@ -421,16 +420,16 @@ export default function Dashboard() {
       )}
 
       {/* --------------------------- Top rotas --------------------------- */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
         <Secao titulo="Maiores rotas" desc="Valor transferido por rota (top 8).">
           <div className="flex flex-col gap-2">
             {topRotas.map((r) => (
               <div key={r.rota} className="flex items-center gap-3" title={`${fmtRs(r.valor)} · ${fmtInt(r.qtd)} un · ${fmtInt(r.linhas)} SKUs`}>
-                <div className="w-24 shrink-0 text-xs font-medium text-slate-600">CD{r.cdOrigem} → CD{r.cdDestino}</div>
-                <div className="h-3 flex-1 overflow-hidden rounded-sm bg-slate-100">
+                <div className="w-20 shrink-0 text-xs font-medium text-slate-600 sm:w-24">CD{r.cdOrigem} → CD{r.cdDestino}</div>
+                <div className="h-3 min-w-0 flex-1 overflow-hidden rounded-sm bg-slate-100">
                   <div className="h-full rounded-r-[4px] bg-brand-500" style={{ width: `${(r.valor / maxRota) * 100}%` }} />
                 </div>
-                <div className="w-20 shrink-0 text-right text-xs tabular-nums text-slate-600">{fmtRsCompacto(r.valor)}</div>
+                <div className="w-16 shrink-0 text-right text-xs tabular-nums text-slate-600 sm:w-20">{fmtRsCompacto(r.valor)}</div>
               </div>
             ))}
             {topRotas.length === 0 && <p className="text-sm text-slate-400">Nenhuma transferência sugerida com os filtros atuais.</p>}

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Badge, Chave, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
+import { Alert, Badge, Chave, ErroCarga, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
@@ -72,6 +72,7 @@ export default function NovaAnalise() {
   const [uploadDireto, setUploadDireto] = useState(false);
   const [dataPosicao, setDataPosicao] = useState("");
   const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
+  const [erroCarga, setErroCarga] = useState<string | null>(null);
 
   // Importação
   const [baseFile, setBaseFile] = useState<File | null>(null);
@@ -82,20 +83,32 @@ export default function NovaAnalise() {
   const baseRef = useRef<HTMLInputElement>(null);
   const pedRef = useRef<HTMLInputElement>(null);
 
-  const carregar = () => {
-    fetch("/api/status").then((r) => r.json()).then((d) => {
-      setParams(d.parametros);
-      setDataset(d.dataset);
-      setUploadDireto(!!d.armazenamento?.uploadDireto);
-      setResultadosDuraveis(!!d.resultados?.duravel);
-    });
-    fetch("/api/cds").then((r) => r.json()).then((d) => setCdsInfo(d.cds ?? []));
-    fetch("/api/importlog").then((r) => r.json()).then((d) => setLog(d.importLog ?? []));
-  };
-  useEffect(carregar, []);
+  const carregar = useCallback(() => {
+    setErroCarga(null);
+    const json = async (u: string) => {
+      const r = await fetch(u);
+      const d = await r.json();
+      if (!r.ok && !d) throw new Error(`${u} respondeu ${r.status}`);
+      return d;
+    };
+    json("/api/status")
+      .then((d) => {
+        setParams(d.parametros);
+        setDataset(d.dataset);
+        setUploadDireto(!!d.armazenamento?.uploadDireto);
+        setResultadosDuraveis(!!d.resultados?.duravel);
+      })
+      // O status é o que sustenta a tela inteira: sem ele não há o que mostrar.
+      .catch((e: Error) => setErroCarga(e.message || "falha ao carregar"));
+    // CDs e histórico são complementos — se falharem, a tela segue utilizável.
+    json("/api/cds").then((d) => setCdsInfo(d.cds ?? [])).catch(() => undefined);
+    json("/api/importlog").then((d) => setLog(d.importLog ?? [])).catch(() => undefined);
+  }, []);
+  useEffect(carregar, [carregar]);
 
   const infoPorCd = useMemo(() => Object.fromEntries(cdsInfo.map((c) => [c.cd, c])) as Record<number, CdInfo>, [cdsInfo]);
 
+  if (erroCarga && (!params || !dataset)) return <ErroCarga erro={erroCarga} onTentar={carregar} />;
   if (!params || !dataset) return <div className="pt-10"><Spinner label="Carregando…" /></div>;
 
   const set = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
@@ -205,6 +218,8 @@ export default function NovaAnalise() {
       if (!r.ok) { setMsg({ tom: "erro", texto: `Erro: ${d.erro}` }); return; }
       setMsg({ tom: "good", texto: `Análise ${d.id} concluída em ${d.meta.tempoMs} ms — ${fmtInt(d.meta.linhasPlano)} linhas, ${fmtRsCompacto(d.meta.valorTransfTotal)} em transferências.` });
       router.push("/");
+    } catch (e) {
+      setMsg({ tom: "erro", texto: `Falha ao rodar a análise: ${(e as Error).message}` });
     } finally {
       setRodando(false);
     }
@@ -274,9 +289,9 @@ export default function NovaAnalise() {
         </button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-3">
         {/* ------------------------- 1. Bases ------------------------- */}
-        <div className="lg:col-span-3">
+        <div className="min-w-0 lg:col-span-3">
           <Secao
             titulo="1 · Bases da análise"
             desc="A base de CDs vem no mesmo layout de antes, agora com todos os CDs empilhados — ela é a fonte de origem E de destino."
@@ -361,7 +376,7 @@ export default function NovaAnalise() {
         </div>
 
         {/* ------------------- 2. Modo de demanda -------------------- */}
-        <div className="lg:col-span-1">
+        <div className="min-w-0 lg:col-span-1">
           <Secao titulo="2 · O que o destino precisa" desc="Define a demanda que a análise vai tentar cobrir.">
             <div className="flex flex-col gap-2">
               <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 ${!modoPedidos ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
@@ -451,7 +466,7 @@ export default function NovaAnalise() {
         </div>
 
         {/* ---------------- 3. Sequência de origens ----------------- */}
-        <div className="lg:col-span-1">
+        <div className="min-w-0 lg:col-span-1">
           <Secao titulo="3 · Sequência das origens" desc="Quem escoa o excesso primeiro. A ordem muda o resultado.">
             <SequenciaCds papel="origem" selecionados={params.origens} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ origens: cds })} />
             <div className="mt-3 border-t border-slate-100 pt-3">
@@ -470,7 +485,7 @@ export default function NovaAnalise() {
         </div>
 
         {/* ---------------- 4. Ordem dos destinos ------------------- */}
-        <div className="lg:col-span-1">
+        <div className="min-w-0 lg:col-span-1">
           <Secao titulo="4 · Ordem dos destinos" desc="Cada origem olha todos estes destinos, nesta prioridade.">
             <SequenciaCds papel="destino" selecionados={params.destinos} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ destinos: cds })} excluir={params.origens} />
             <div className="mt-3 border-t border-slate-100 pt-3">
@@ -502,7 +517,7 @@ export default function NovaAnalise() {
         </div>
 
         {/* -------------------- 5. Parâmetros ---------------------- */}
-        <div className="lg:col-span-3">
+        <div className="min-w-0 lg:col-span-3">
           <Secao
             titulo="5 · Parâmetros, embarque e alíquotas por rota"
             desc="O ICMS depende do par origem → destino, por isso a alíquota é por rota."
@@ -617,7 +632,7 @@ export default function NovaAnalise() {
         </div>
 
         {/* ------------------ 6. Capacidade operacional -------------- */}
-        <div className="lg:col-span-3">
+        <div className="min-w-0 lg:col-span-3">
           <Secao
             titulo="6 · Capacidade operacional"
             desc="O limite físico da rede na janela desta análise: quanto cada CD expede, quanto recebe e quanto cada rota transporta. Deixe 0 para sem limite."
@@ -766,7 +781,7 @@ export default function NovaAnalise() {
 
         {/* ---------------------- Histórico ------------------------ */}
         {log.length > 0 && (
-          <div className="lg:col-span-3">
+          <div className="min-w-0 lg:col-span-3">
             <Secao titulo="Histórico de importações" desc="Auditoria das bases carregadas nesta instância.">
               <div className="overflow-x-auto thin-scroll">
                 <table className="min-w-full">

@@ -16,7 +16,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="flex min-h-screen">
           <Nav />
-          <main className="flex-1 min-w-0 px-6 py-6 lg:px-8">{children}</main>
+          {/* pt-16 abre espaço para a barra superior fixa do celular. */}
+          <main className="flex-1 min-w-0 px-4 pb-6 pt-20 sm:px-6 md:pt-6 lg:px-8">{children}</main>
         </div>
       </body>
     </html>
