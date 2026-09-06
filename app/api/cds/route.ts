@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
  * sequência de origens e destinos na tela de análise.
  */
 export async function GET() {
+  await store.ensureBase();
   const base = store.getBase();
   const pedidos = store.getPedidos();
   const compromissos = await carteira.compromissos();

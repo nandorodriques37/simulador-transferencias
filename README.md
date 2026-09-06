@@ -228,6 +228,38 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 
 ---
 
+## 🗄️ O que o app guarda (e o que é descartável)
+
+A decisão de arquitetura é simples: **o app guarda resultado, não base**.
+
+| Camada | O que é | Onde vive | Sobrevive a deploy/instância? |
+|---|---|---|---|
+| **Carteira** | sugestões aprovadas e baixas por faturamento | Postgres (Neon) | ✅ sempre |
+| **Resultado das análises** | parâmetros, KPIs, resumos por rota/origem/destino, o que foi aprovado | Postgres, ou o armazenamento de arquivos quando não há banco | ✅ |
+| **Insumo (base + pedidos)** | a planilha normalizada | Armazenamento de arquivos (Vercel Blob), em TSV comprimido | ✅ reconstruído em segundos |
+| **Plano linha a linha** | as ~240 mil linhas de rota × SKU | memória da instância | ❌ recalculado em um clique |
+
+O plano detalhado é material de trabalho da sessão: quem opera roda a análise,
+filtra e aprova. Se a instância esfria, o **dashboard continua mostrando os KPIs
+e os resumos salvos** e a tela do Plano oferece *Recalcular* — mesma base, mesmos
+parâmetros, mesmo id de análise, alguns segundos. Nada de subir a planilha de novo.
+
+Por que não persistir o plano inteiro: são ~150 MB por rodada. O que a operação
+precisa reter é o que foi **decidido** (a carteira) e o que foi **medido** (os
+KPIs) — não o rascunho que levou até lá.
+
+### Upload de arquivo grande
+
+O corpo de uma função serverless no Vercel não passa de **4,5 MB**, e a base real
+tem dezenas de MB. Com `BLOB_READ_WRITE_TOKEN` configurado, a tela envia o
+arquivo **direto do navegador para o Vercel Blob** e a importação recebe só a
+URL — o arquivo nunca atravessa a função. Sem o token, o app cai no upload
+tradicional (que funciona local e para arquivos pequenos) e a tela avisa qual
+caminho está ativo.
+
+Números medidos com 300 mil linhas (CSV de 54 MB): importação em ~4 s, e o
+insumo normalizado ocupa **2,1 MB** no armazenamento.
+
 ## 🚀 Deploy no Vercel
 
 ```bash
@@ -237,23 +269,35 @@ npm run dev        # http://localhost:3000
 
 1. Importe o repositório no Vercel (framework **Next.js** detectado
    automaticamente; `vercel.json` ajusta o timeout das rotas pesadas).
-2. **Persistência (Vercel Neon / Postgres):** crie um banco Neon no painel do
-   Vercel e conecte ao projeto — `POSTGRES_URL` (ou `DATABASE_URL`) é injetada
+2. **Banco (Vercel Neon / Postgres):** crie um banco Neon no painel do Vercel e
+   conecte ao projeto — `POSTGRES_URL` (ou `DATABASE_URL`) é injetada
    automaticamente. Opcionalmente aplique o esquema completo:
 
    ```bash
    npm run seed:pg
    ```
 
-   O que é persistido é a **carteira** (`sugestao_transferencia` e
-   `faturamento_evento`, criadas sob demanda) — o estado que precisa atravessar
-   análises. Sem banco, o app roda em **modo demonstração**: base sintética com
-   6 CDs (`lib/data/seed.ts`) e carteira em memória, efêmera por instância. A
-   tela avisa quando está nesse modo.
+   Guarda a **carteira** (`sugestao_transferencia`, `faturamento_evento`) e o
+   **resultado das análises** (`analise_resultado`) — as tabelas são criadas sob
+   demanda.
 
-   > As bases importadas e o resultado das análises ficam em memória por
-   > instância (até 8 análises). O esquema em `lib/store/schema.sql` já prevê as
-   > tabelas de staging para persistir também as bases.
+3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store e conecte ao
+   projeto; `BLOB_READ_WRITE_TOKEN` é injetada automaticamente. É o que
+   habilita o **upload direto** (arquivos acima de 4,5 MB) e o que faz o insumo
+   sobreviver à troca de instância. Sem ele, o app grava em `.data/` no disco
+   local — bom para desenvolvimento, efêmero no serverless.
+
+   Sem banco **e** sem Blob, tudo roda em memória: útil para avaliar, mas a tela
+   sinaliza o estado e nada sobrevive a um novo deploy.
+
+   **Variáveis de ambiente**
+
+   | Variável | Para quê |
+   |---|---|
+   | `POSTGRES_URL` / `DATABASE_URL` | carteira e resultados das análises |
+   | `BLOB_READ_WRITE_TOKEN` | upload direto e insumo durável |
+   | `DADOS_DIR` | pasta local do armazenamento em disco (padrão `.data`) |
+   | `DEMO_DATA` | `1` força a base de exemplo; `0` desliga em qualquer ambiente |
 
 ### Pipeline: PR aprovado → app publicado
 
@@ -282,7 +326,8 @@ app/                   Telas + rotas de API
 lib/engine/            Motor de rede (puro) + tipos + testes
 lib/data/              Esquemas, parsing, validação, leitura de planilha, seed
 lib/query/             Filtro/paginação/agregação server-side
-lib/store/             Estado da instância + carteira (Neon/memória) + schema.sql
+lib/store/             Estado da instância, carteira, resultados das análises,
+                       repositório do insumo e armazenamento (Blob/disco)
 lib/export.ts          CSV/Excel do plano e ordem de transferência
 components/            Nav, UI e o seletor ordenado de CDs
 ```
@@ -314,7 +359,7 @@ Explícitos de propósito — o motor é guloso e determinístico, não um otimi
 
 ## 🔭 Próximos passos previstos
 
-Persistir as bases no Neon (staging já modelado), frete por rota e consolidação
+Frete por rota e consolidação
 de carga, validade (shelf life) e lead time no horizonte, capacidade por janela
 diária, solver de otimização global como modo avançado (a cascata gulosa segue
 como padrão) e integração direta com o ERP para dispensar a importação manual

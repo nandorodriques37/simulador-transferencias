@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
 import { carteira, NovaSugestao, StatusSugestao } from "@/lib/store/carteira";
+import { analisesStore } from "@/lib/store/analises";
 import { filtrarPlano } from "@/lib/query/plano";
 import { rotuloMes } from "@/lib/data/defaults";
 
@@ -88,6 +89,12 @@ export async function POST(req: NextRequest) {
   }));
 
   const r = await carteira.aprovar(analise.id, itens, getUsuario(req));
+  // Controle: a análise salva registra o que saiu dela para a carteira.
+  await analisesStore.registrarAprovacao(analise.id, {
+    linhas: itens.length,
+    qtd: itens.reduce((a, i) => a + i.qtd, 0),
+    valor: itens.reduce((a, i) => a + i.valor, 0),
+  });
   return NextResponse.json({ ...r, resumo: await carteira.resumo() });
 }
 

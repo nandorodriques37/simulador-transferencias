@@ -48,13 +48,24 @@ interface DashResp {
   origens: ResumoOrigem[];
   destinos: ResumoDestino[];
   tempoMs: number;
+  somenteResultado?: boolean;
+  aprovado?: { linhas: number; qtd: number; valor: number; em: string } | null;
   erro?: string;
   semAnalise?: boolean;
+}
+
+interface AnaliseHistorico {
+  id: string; criadoEm: string; criadoPor: string; label: string; fonteBase: string;
+  modoDemanda: string; origens: number[]; destinos: number[]; tempoMs: number;
+  kpis: { valorTransfTotal: number; coberturaNecessidade: number; impactoFiscalTotal: number; linhasPlano: number };
+  aprovado?: { linhas: number; qtd: number; valor: number; em: string };
 }
 
 export default function Dashboard() {
   const [cobertura, setCobertura] = useState<"total" | "acima_limite">("total");
   const [data, setData] = useState<DashResp | null>(null);
+  const [historico, setHistorico] = useState<AnaliseHistorico[]>([]);
+  const [duravel, setDuravel] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -64,6 +75,16 @@ export default function Dashboard() {
       .then(setData)
       .finally(() => setLoading(false));
   }, [cobertura]);
+
+  useEffect(() => {
+    fetch("/api/analise")
+      .then((r) => r.json())
+      .then((d) => {
+        setHistorico(d.analises ?? []);
+        setDuravel(!!d.duravel);
+      })
+      .catch(() => undefined);
+  }, [data?.analise?.id]);
 
   if (loading && !data) return <div className="pt-10"><Spinner label="Carregando painel…" /></div>;
   if (!data) return null;
@@ -146,6 +167,26 @@ export default function Dashboard() {
         {data.regras?.arredondarCaixaFechada && <Badge>Só caixa fechada</Badge>}
         {data.regras?.semRestricoes && <Badge tom="good">Sem restrições operacionais</Badge>}
       </div>
+
+      {data.somenteResultado && (
+        <div className="mb-4">
+          <Alert tom="info">
+            Mostrando o <b>resultado salvo</b> desta análise: KPIs e resumos por rota, origem e destino. O detalhe linha
+            a linha não é persistido — abra o <Link href="/plano" className="underline">Plano</Link> para recalculá-lo
+            em um clique, com a mesma base e os mesmos parâmetros.
+          </Alert>
+        </div>
+      )}
+
+      {data.aprovado && data.aprovado.linhas > 0 && (
+        <div className="mb-4">
+          <Alert tom="good">
+            Desta análise já saíram <b>{fmtInt(data.aprovado.linhas)} linhas</b> para a carteira —{" "}
+            {fmtInt(data.aprovado.qtd)} un, {fmtRsCompacto(data.aprovado.valor)}. Elas seguem descontando origem e
+            destino até o faturamento ser importado.
+          </Alert>
+        </div>
+      )}
 
       {kpis.rotasSemAliquota.length > 0 && (
         <div className="mb-4">
@@ -421,6 +462,57 @@ export default function Dashboard() {
           </div>
         </Secao>
       </div>
+
+      {/* --------------------------- Histórico --------------------------- */}
+      {historico.length > 0 && (
+        <div className="mt-4">
+          <Secao
+            titulo="Histórico de análises"
+            desc="O resultado de cada rodada fica salvo — parâmetros, KPIs e o que foi aprovado."
+            right={<Badge tom={duravel ? "good" : "warn"}>{duravel ? "🗄 Persistido" : "⚠ Em memória"}</Badge>}
+          >
+            <div className="overflow-x-auto thin-scroll">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="th">Quando</th>
+                    <th className="th">Análise</th>
+                    <th className="th">Rede</th>
+                    <th className="th text-right">Transferido</th>
+                    <th className="th text-right">Cobertura</th>
+                    <th className="th text-right">Fiscal</th>
+                    <th className="th text-right">Aprovado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historico.map((h) => (
+                    <tr key={h.id} className={`border-b border-slate-100 ${h.id === data.analise.id ? "bg-brand-50/40" : ""}`}>
+                      <td className="td">{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
+                      <td className="td">
+                        <span className="font-medium">{h.id}</span>
+                        <div className="text-[11px] text-slate-400">{h.label}</div>
+                      </td>
+                      <td className="td text-slate-500">
+                        {h.origens.length}→{h.destinos.length} · {h.modoDemanda === "pedidos" ? "pedidos" : "saldo ideal"}
+                      </td>
+                      <td className="td num">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</td>
+                      <td className="td num">{fmtPct(h.kpis?.coberturaNecessidade ?? 0, 0)}</td>
+                      <td className="td num text-slate-500">{fmtRsCompacto(h.kpis?.impactoFiscalTotal ?? 0)}</td>
+                      <td className="td num">
+                        {h.aprovado && h.aprovado.linhas > 0 ? (
+                          <span className="text-emerald-600">{fmtRsCompacto(h.aprovado.valor)}</span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Secao>
+        </div>
+      )}
     </div>
   );
 }

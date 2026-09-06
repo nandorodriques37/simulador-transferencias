@@ -52,7 +52,7 @@ interface Parametros {
 interface Achado { nivel: "erro" | "aviso" | "info"; codigo: string; mensagem: string; qtd: number; exemplos?: string[] }
 interface Relatorio { baseLinhas: number; pedidosLinhas: number; cdsBase: number[]; achados: Achado[]; ok: boolean }
 interface Dataset {
-  pronto: boolean; demo: boolean;
+  pronto: boolean; demo: boolean; duravel: boolean; salvoEm: string;
   baseLinhas: number; pedidosLinhas: number; produtos: number; cds: number[];
   fonteBase: string; fontePedidos: string; importedEm: string; mesesPedidos: string[];
 }
@@ -69,6 +69,8 @@ export default function NovaAnalise() {
   const [msg, setMsg] = useState<{ tom: "good" | "erro" | "info"; texto: string } | null>(null);
   const [rodando, setRodando] = useState(false);
   const [limitarRota, setLimitarRota] = useState(false);
+  const [uploadDireto, setUploadDireto] = useState(false);
+  const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
 
   // Importação
   const [baseFile, setBaseFile] = useState<File | null>(null);
@@ -80,7 +82,12 @@ export default function NovaAnalise() {
   const pedRef = useRef<HTMLInputElement>(null);
 
   const carregar = () => {
-    fetch("/api/status").then((r) => r.json()).then((d) => { setParams(d.parametros); setDataset(d.dataset); });
+    fetch("/api/status").then((r) => r.json()).then((d) => {
+      setParams(d.parametros);
+      setDataset(d.dataset);
+      setUploadDireto(!!d.armazenamento?.uploadDireto);
+      setResultadosDuraveis(!!d.resultados?.duravel);
+    });
     fetch("/api/cds").then((r) => r.json()).then((d) => setCdsInfo(d.cds ?? []));
     fetch("/api/importlog").then((r) => r.json()).then((d) => setLog(d.importLog ?? []));
   };
@@ -137,11 +144,35 @@ export default function NovaAnalise() {
     setImportando(true);
     setProgresso(dryRun ? 30 : 20);
     if (dryRun) setRelatorio(null);
-    const fd = new FormData();
-    if (baseFile) fd.append("base", baseFile);
-    if (pedFile) fd.append("pedidos", pedFile);
-    fd.append("dryRun", String(dryRun));
-    const r = await fetch("/api/import", { method: "POST", body: fd });
+    try {
+    let r: Response;
+    if (uploadDireto) {
+      // Arquivo grande não cabe no corpo de uma função serverless (4,5 MB): vai
+      // direto do navegador para o armazenamento e a importação recebe a URL.
+      const { upload } = await import("@vercel/blob/client");
+      const enviar = async (f: File, prefixo: string) => {
+        const blob = await upload(`upload/${prefixo}-${Date.now()}-${f.name}`, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          onUploadProgress: ({ percentage }) => setProgresso(Math.round(percentage * 0.7)),
+        });
+        return blob.url;
+      };
+      const baseUrl = baseFile ? await enviar(baseFile, "base") : undefined;
+      const pedidosUrl = pedFile ? await enviar(pedFile, "pedidos") : undefined;
+      setProgresso(75);
+      r = await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseUrl, pedidosUrl, dryRun }),
+      });
+    } else {
+      const fd = new FormData();
+      if (baseFile) fd.append("base", baseFile);
+      if (pedFile) fd.append("pedidos", pedFile);
+      fd.append("dryRun", String(dryRun));
+      r = await fetch("/api/import", { method: "POST", body: fd });
+    }
     setProgresso(90);
     const d = await r.json();
     setProgresso(100);
@@ -155,6 +186,10 @@ export default function NovaAnalise() {
       carregar();
     } else if (!dryRun) {
       setMsg({ tom: "erro", texto: `Importação bloqueada: ${d.erro}` });
+    }
+    } catch (e) {
+      setImportando(false);
+      setMsg({ tom: "erro", texto: `Falha no envio: ${(e as Error).message}` });
     }
   };
 
@@ -247,6 +282,14 @@ export default function NovaAnalise() {
               <div className="text-right text-xs text-slate-500">
                 <div>{fmtInt(dataset.baseLinhas)} linhas · {fmtInt(dataset.produtos)} produtos · {dataset.cds.length} CDs</div>
                 <div>{fmtInt(dataset.pedidosLinhas)} linhas de pedido</div>
+                <div className="mt-1 flex justify-end gap-1">
+                  <Badge tom={uploadDireto ? "good" : "warn"}>
+                    {uploadDireto ? "Upload direto (arquivo grande)" : "Upload pela API (até 4,5 MB)"}
+                  </Badge>
+                  <Badge tom={resultadosDuraveis ? "good" : "warn"}>
+                    {resultadosDuraveis ? "Resultados persistidos" : "Resultados em memória"}
+                  </Badge>
+                </div>
               </div>
             }
           >

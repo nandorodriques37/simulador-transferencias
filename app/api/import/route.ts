@@ -16,15 +16,41 @@ export const maxDuration = 60;
  *   - "pedidos" → pedidos projetados (usados no modo Pedidos).
  * `dryRun=true` só valida e devolve a prévia, sem trocar a base.
  */
+/** Baixa um arquivo já enviado ao armazenamento e o devolve como File. */
+async function baixar(url: string, nomePadrao: string): Promise<File> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`não foi possível ler o arquivo enviado (${resp.status})`);
+  const nome = decodeURIComponent(new URL(url).pathname.split("/").pop() || nomePadrao);
+  return new File([await resp.arrayBuffer()], nome);
+}
+
 export async function POST(req: NextRequest) {
-  const form = await req.formData();
-  const baseFile = form.get("base") as File | null;
-  const pedidosFile = form.get("pedidos") as File | null;
-  const dryRun = form.get("dryRun") === "true";
+  // Dois caminhos: arquivo no corpo (até 4,5 MB) ou URL de um upload direto.
+  let baseFile: File | null = null;
+  let pedidosFile: File | null = null;
+  let dryRun = false;
+
+  if (req.headers.get("content-type")?.includes("application/json")) {
+    const body = (await req.json()) as { baseUrl?: string; pedidosUrl?: string; dryRun?: boolean };
+    dryRun = body.dryRun === true;
+    try {
+      if (body.baseUrl) baseFile = await baixar(body.baseUrl, "base.csv");
+      if (body.pedidosUrl) pedidosFile = await baixar(body.pedidosUrl, "pedidos.csv");
+    } catch (e) {
+      return NextResponse.json({ erro: (e as Error).message }, { status: 400 });
+    }
+  } else {
+    const form = await req.formData();
+    baseFile = form.get("base") as File | null;
+    pedidosFile = form.get("pedidos") as File | null;
+    dryRun = form.get("dryRun") === "true";
+  }
 
   if (!baseFile && !pedidosFile)
     return NextResponse.json({ erro: "envie ao menos um arquivo (base de CDs ou base de pedidos)" }, { status: 400 });
 
+  // Importação parcial (só pedidos, por exemplo) precisa da base já carregada.
+  await store.ensureBase();
   const modoDemanda = store.getParametros().modoDemanda;
   let base: LinhaBase[] | null = null;
   let pedidos: PedidoProjetado[] | null = null;
@@ -58,7 +84,7 @@ export async function POST(req: NextRequest) {
   if (!relatorio.ok)
     return NextResponse.json({ erro: "importação bloqueada por erros de validação", relatorio }, { status: 422 });
 
-  const log = store.setDataset(
+  const log = await store.setDataset(
     base,
     pedidos,
     baseFile?.name ?? "",

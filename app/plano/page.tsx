@@ -24,6 +24,7 @@ interface PlanoResp {
   facets: Facets; totaisFiltro: { qtd: number; valor: number; imediata: number; fiscal: number };
   total: number; page: number; pageSize: number; totalPaginas: number; itens: LinhaPlano[];
   erro?: string; semAnalise?: boolean;
+  precisaRecalcular?: boolean; parametros?: unknown; label?: string; criadoEm?: string;
 }
 
 const FILTROS_INICIAIS: Record<string, string> = {
@@ -40,6 +41,7 @@ export default function Plano() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<{ tom: "good" | "erro"; texto: string } | null>(null);
   const [aprovando, setAprovando] = useState(false);
+  const [recalculando, setRecalculando] = useState(false);
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -57,8 +59,53 @@ export default function Plano() {
   }, [qs]);
   useEffect(carregar, [carregar]);
 
+  const recalcular = async () => {
+    if (!data?.parametros) return;
+    setRecalculando(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/analise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parametros: data.parametros, label: data.label, analiseId: data.analiseId }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setMsg({ tom: "erro", texto: `Não foi possível recalcular: ${d.erro}` });
+        return;
+      }
+      carregar();
+    } finally {
+      setRecalculando(false);
+    }
+  };
+
   if (loading && !data) return <div className="pt-10"><Spinner label="Carregando plano…" /></div>;
   if (!data) return null;
+
+  // O detalhe por SKU não é persistido: quando a instância está fria, o
+  // resultado salvo sobrevive e o plano é reconstruído em um clique.
+  if (data.precisaRecalcular) {
+    return (
+      <div>
+        <PageHeader title="Plano de transferência" subtitle={`Análise ${data.analiseId} · ${data.label ?? ""}`} />
+        <div className="card p-8 text-center">
+          <p className="text-sm text-slate-600">
+            O <b>resultado</b> desta análise está salvo (KPIs e resumos aparecem no dashboard), mas o detalhe linha a
+            linha vive só durante a sessão — e esta instância está fria.
+          </p>
+          <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
+            Recalcular usa a mesma base e os mesmos parâmetros: leva alguns segundos e devolve o plano completo para
+            filtrar e aprovar.
+          </p>
+          <button onClick={recalcular} disabled={recalculando} className="btn-primary mt-4 inline-flex">
+            {recalculando ? "Recalculando…" : "↻ Recalcular o plano"}
+          </button>
+          {msg && <div className="mt-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+        </div>
+      </div>
+    );
+  }
 
   if (data.semAnalise || data.erro) {
     return (
