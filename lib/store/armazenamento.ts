@@ -85,10 +85,18 @@ export async function remover(chave: string): Promise<void> {
     }
     return;
   }
-  const { unlink } = await import("node:fs/promises");
+  const { rmdir, unlink } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const caminho = caminhoDisco(chave);
   try {
-    await unlink(caminhoDisco(chave));
+    await unlink(caminho);
   } catch {
     /* já não existe */
+  }
+  // O Blob não tem diretório; no disco, a pasta vazia sobraria.
+  try {
+    await rmdir(dirname(caminho));
+  } catch {
+    /* ainda tem arquivo dentro, ou é a raiz */
   }
 }
