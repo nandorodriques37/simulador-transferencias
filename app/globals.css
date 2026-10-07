@@ -549,11 +549,12 @@ select.pgm-campo__controle { appearance: none; padding-right: 36px;
 .chave[aria-checked="true"] .chave__estado { color: var(--texto-marca); }
 
 /* Upload */
-.upload { display: flex; align-items: center; gap: 16px; padding: 16px 18px; border: 1.5px dashed var(--cinza-serie); border-radius: var(--raio); background: var(--papel-2); }
+.upload { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px 18px; border: 1.5px dashed var(--cinza-serie); border-radius: var(--raio); background: var(--papel-2); }
 .upload__ico { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--azul-tint); color: var(--texto-marca); }
-.upload__txt { flex: 1; min-width: 0; }
-.upload__txt b { display: block; font-size: 16px; font-weight: 700; color: var(--ink); }
-.upload__txt span { display: block; font-size: 14px; color: var(--ink-2); margin-top: 2px; }
+.upload__txt { flex: 1 1 180px; min-width: 0; }
+.upload .pgm-botao { flex: none; margin-left: auto; white-space: nowrap; }
+.upload__txt b { display: block; font-size: 15px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload__txt span { display: block; font-size: 13px; color: var(--ink-2); margin-top: 2px; }
 .upload[data-ok="true"] { border-style: solid; border-color: var(--verde); background: var(--verde-tint); }
 .upload[data-ok="true"] .upload__ico { background: var(--verde-tint); color: var(--verde); }
 
