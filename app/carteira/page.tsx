@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Alert, Badge, ErroCarga, Kpi, Modal, PageHeader, Progress, Revalidando, Secao, Spinner } from "@/components/ui";
+import { Alert, Campo, ErroCarga, Estado, Fonte, Kpi, Kpis, Modal, PageHeader, Pill, Progress, Revalidando, Rolagem, Rota, Secao, Spinner, Status } from "@/components/ui";
+import { Icone } from "@/components/icones";
 import { fmtInt, fmtRs, fmtRsCompacto } from "@/lib/format";
 import { useApi, useDebounce } from "@/lib/useApi";
 
@@ -31,6 +32,8 @@ export default function Carteira() {
 
   // Modal de faturamento
   const [modal, setModal] = useState(false);
+  const [confirmaCancelar, setConfirmaCancelar] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
   const [fatFile, setFatFile] = useState<File | null>(null);
   const [previa, setPrevia] = useState<{ linhas: number; quantidadeTotal: number; rotas: string[] } | null>(null);
   const [achados, setAchados] = useState<Achado[] | null>(null);
@@ -48,7 +51,7 @@ export default function Carteira() {
   const data = api.data;
   const carregar = api.recarregar;
 
-  if (api.carregando) return <div className="pt-10"><Spinner label="Carregando carteira…" /></div>;
+  if (api.carregando) return <Spinner label="Abrindo a carteira…" />;
   if (api.erro && !data) return <ErroCarga erro={api.erro} onTentar={api.recarregar} />;
   if (!data) return null;
 
@@ -56,9 +59,11 @@ export default function Carteira() {
   const aberto = (s: Sugestao) => (s.status === "aprovada" ? Math.max(s.qtd - s.qtdFaturada, 0) : 0);
   const dias = (s: Sugestao) => Math.floor((Date.now() - new Date(s.criadoEm).getTime()) / 86400000);
 
+  // A confirmação é um modal (não mais window.confirm): mostra o que será
+  // cancelado e o volume que volta a ficar disponível.
   const cancelar = async () => {
     if (sel.size === 0) return;
-    if (!window.confirm(`Cancelar ${sel.size} sugestão(ões)? Elas voltam a liberar excesso na origem e necessidade no destino.`)) return;
+    setCancelando(true);
     try {
       const r = await fetch("/api/carteira", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(sel) }) });
       const d = await r.json();
@@ -69,6 +74,9 @@ export default function Carteira() {
       // Sem isso, uma rede fora do ar deixava o cancelamento em silêncio — e o
       // usuário sem saber se as sugestões continuam valendo.
       setMsg({ tom: "erro", texto: `Falha ao cancelar: ${(e as Error).message}. Nada foi alterado.` });
+    } finally {
+      setCancelando(false);
+      setConfirmaCancelar(false);
     }
   };
 
@@ -113,125 +121,126 @@ export default function Carteira() {
     carregar();
   };
 
+  const selecionadas = itens.filter((s) => sel.has(s.id));
+  const unSelecionadas = selecionadas.reduce((a, s) => a + aberto(s), 0);
+  const situacao = (s: Sugestao): { tom: "aberta" | "faturada" | "parcial" | "velha" | "cancelada"; rotulo: string } => {
+    if (s.status === "faturada") return { tom: "faturada", rotulo: "Faturada" };
+    if (s.status === "cancelada") return { tom: "cancelada", rotulo: "Cancelada" };
+    if (s.qtdFaturada > 0) return { tom: "parcial", rotulo: "Faturada em parte" };
+    const d = dias(s);
+    if (d >= 30) return { tom: "velha", rotulo: `Em aberto há ${fmtInt(d)} dias` };
+    return { tom: "aberta", rotulo: "Em aberto" };
+  };
+  const titulo =
+    resumo.envelhecidas > 0
+      ? <><em>{fmtInt(resumo.envelhecidas)} sugest{resumo.envelhecidas === 1 ? "ão" : "ões"}</em> em aberto há mais de 30 dias segue{resumo.envelhecidas === 1 ? "" : "m"} reservando estoque</>
+      : resumo.aprovadas > 0
+        ? <>{fmtInt(resumo.aprovadas)} sugest{resumo.aprovadas === 1 ? "ão" : "ões"} em aberto reserva{resumo.aprovadas === 1 ? "" : "m"} {fmtInt(resumo.qtdAberta)} un nas origens</>
+        : "Nenhuma sugestão em aberto na carteira";
+  const dataBase = data.dataPosicao ? new Date(data.dataPosicao).toLocaleDateString("pt-BR") : "";
+
   return (
-    <div>
+    <>
       <PageHeader
-        title="Carteira de transferências"
-        subtitle={
-          <>
-            Sugestões aprovadas seguem descontando o excesso da origem e entrando como trânsito no destino
-            <b> até o faturamento ser importado</b>.
-          </>
-        }
+        title={titulo}
+        subtitle="Sugestões aprovadas descontam a origem e entram como trânsito no destino até o faturamento ser importado"
         right={
-          <div className="flex gap-2">
-            <button onClick={() => setModal(true)} className="btn-secondary">↑ Importar faturamento</button>
-            <a href="/api/carteira/ordem" className="btn-primary">Gerar ordem (ERP)</a>
-          </div>
+          <>
+            <Revalidando ativo={api.revalidando} />
+            <button type="button" onClick={() => setModal(true)} className="pgm-botao pgm-botao--secundario">Importar faturamento</button>
+            <a href="/api/carteira/ordem" className="pgm-botao">Gerar ordem (ERP)</a>
+          </>
         }
       />
 
-      {msg && <div className="mb-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
-      {api.erro && (
-        <div className="mb-3">
-          <Alert tom="erro">
-            Falha ao atualizar a carteira ({api.erro}) — a lista abaixo é da última carga.{" "}
-            <button onClick={api.recarregar} className="underline">Tentar de novo</button>
-          </Alert>
-        </div>
-      )}
-      {!data.durable && (
-        <div className="mb-3">
-          <Alert tom="warn">
-            Sem banco configurado: a carteira está <b>em memória</b> (modo demo) e se perde ao reiniciar a instância.
-            Conecte o Vercel Neon/Postgres para torná-la durável.
-          </Alert>
-        </div>
-      )}
-
-      {resumo.envelhecidas > 0 && (
-        <div className="mb-3">
-          <Alert tom="warn">
-            <b>{fmtInt(resumo.envelhecidas)} sugestão(ões) em aberto há mais de 30 dias</b> (a mais antiga tem{" "}
-            {fmtInt(resumo.diasMaisAntiga)} dias). Enquanto estiverem aqui, elas seguem reservando estoque na origem e
-            reduzindo a necessidade do destino em toda análise. Se a transferência não vai acontecer, cancele — o
-            volume volta a ficar disponível.
-          </Alert>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi titulo="Sugestões em aberto" valor={fmtInt(resumo.aprovadas)} sub="aprovadas e ainda não faturadas" tom="brand" />
-        <Kpi titulo="Volume comprometido" valor={fmtInt(resumo.qtdAberta)} sub="unidades reservadas na origem" tom="azul" />
-        <Kpi
-          titulo="A base atual não reflete"
-          valor={fmtInt(resumo.qtdNaoRefletida)}
-          sub={`${fmtRsCompacto(resumo.valorNaoRefletido)} · é o que a próxima análise desconta`}
-          tom="warn"
-        />
-        <Kpi titulo="Já faturadas" valor={fmtInt(resumo.faturadas)} sub={`${fmtInt(resumo.qtdFaturada)} un confirmadas`} tom="good" />
-      </div>
-
-      <div className="mt-3">
-        <Alert tom="info">
-          <b>Como o app evita duplicar:</b> uma transferência faturada <i>antes</i> da data da base já aparece nos
-          números importados e sai da conta; faturada <i>depois</i>, ela continua descontando até a próxima base
-          chegar. Por isso a <b>data da posição de estoque</b> informada na importação é o dado que sustenta o ciclo.
-          {data.dataPosicao && (
-            <> Base atual: posição de <b>{new Date(data.dataPosicao).toLocaleDateString("pt-BR")}</b>.</>
+      {(msg || api.erro || !data.durable || resumo.envelhecidas > 0) && (
+        <div className="flex flex-col gap-3">
+          {msg && <Alert tom={msg.tom} titulo={msg.tom === "good" ? "Pronto" : msg.tom === "erro" ? "Falha" : "Informação"}>{msg.texto}</Alert>}
+          {api.erro && (
+            <Alert tom="erro" titulo="Falha ao atualizar" acao={<button onClick={api.recarregar} className="pgm-botao pgm-botao--secundario" type="button">Tentar de novo</button>}>
+              {api.erro}. A lista abaixo é da última carga.
+            </Alert>
           )}
-        </Alert>
-      </div>
+          {!data.durable && (
+            <Alert tom="warn" titulo="Sem banco · modo demonstração">
+              A carteira está <b>em memória</b> e se perde ao reiniciar a instância. Conecte o Postgres (Neon) para torná-la durável.
+            </Alert>
+          )}
+          {resumo.envelhecidas > 0 && (
+            <Alert
+              tom="warn"
+              titulo="Em aberto há mais de 30 dias"
+              acao={status !== "aprovada" ? <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => setStatus("aprovada")}>Ver em aberto</button> : undefined}
+            >
+              {fmtInt(resumo.envelhecidas)} sugestão(ões); a mais antiga tem {fmtInt(resumo.diasMaisAntiga)} dias. Enquanto estiverem aqui, reservam estoque na origem e reduzem a necessidade do destino em toda análise. Se a transferência não vai acontecer, cancele: o volume volta a ficar disponível.
+            </Alert>
+          )}
+        </div>
+      )}
 
-      <div className="mt-4">
-        <Secao
-          titulo="Sugestões"
-          desc="Aprovadas descontam as próximas análises; faturadas já estão refletidas nas bases; canceladas não contam."
-          right={
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="pb-1.5"><Revalidando ativo={api.revalidando} /></div>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="produto ou código" className="input w-44 py-1.5 text-xs" />
-              <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)} className="input py-1.5 text-xs">
+      <Kpis label="Indicadores da carteira">
+        <Kpi titulo="Sugestões em aberto" valor={fmtInt(resumo.aprovadas)} sub="aprovadas e ainda não faturadas" />
+        <Kpi titulo="Volume comprometido" valor={fmtInt(resumo.qtdAberta)} sub={`unidades reservadas na origem · ${fmtRsCompacto(resumo.valorAberto)}`} />
+        <Kpi titulo="A base atual não reflete" valor={fmtInt(resumo.qtdNaoRefletida)} sub={`${fmtRsCompacto(resumo.valorNaoRefletido)} · é o que a próxima análise desconta`} tom={resumo.qtdNaoRefletida > 0 ? "warn" : "default"} />
+        <Kpi titulo="Já faturadas" valor={fmtInt(resumo.faturadas)} sub={`${fmtInt(resumo.qtdFaturada)} un confirmadas`} tom="good" />
+      </Kpis>
+
+      <Alert tom="info" titulo="Como o app evita duplicar">
+        Faturada <i>antes</i> da data da base: já aparece nos números importados e sai da conta. Faturada <i>depois</i>: continua descontando até a próxima base chegar. Por isso a <b>data da posição de estoque</b> informada na importação sustenta o ciclo.{dataBase && <> Base atual com posição de <b>{dataBase}</b>.</>}
+      </Alert>
+
+      {/* ------------------------------- Sugestões ------------------------------ */}
+      <Secao flush titulo="Sugestões" desc="Aprovadas descontam as próximas análises; faturadas já estão refletidas nas bases; canceladas não contam.">
+        <div style={{ padding: "0 24px 16px" }}>
+          <div className="pgm-filtros">
+            <Campo rotulo="Buscar" htmlFor="c-busca" style={{ minWidth: 240 }}>
+              <input id="c-busca" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Produto ou código" className="pgm-campo__controle" />
+            </Campo>
+            <Campo rotulo="Situação" htmlFor="c-status">
+              <select id="c-status" value={status} onChange={(e) => setStatus(e.target.value as typeof status)} className="pgm-campo__controle">
                 <option value="aprovada">Em aberto</option>
                 <option value="faturada">Faturadas</option>
                 <option value="todas">Todas</option>
               </select>
-              <button onClick={cancelar} disabled={sel.size === 0} className="btn-ghost py-1.5 text-xs">Cancelar ({sel.size})</button>
-            </div>
-          }
-        >
-          <div className="overflow-x-auto thin-scroll">
-            <table className="min-w-full">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="thc w-8">
-                    <input
-                      type="checkbox"
-                      checked={itens.length > 0 && itens.every((s) => sel.has(s.id))}
-                      onChange={() => setSel(itens.every((s) => sel.has(s.id)) ? new Set() : new Set(itens.map((s) => s.id)))}
-                    />
-                  </th>
-                  <th className="thc">Rota</th>
-                  <th className="thc">Código</th>
-                  <th className="thc">Produto</th>
-                  <th className="thc text-right">Aprovada</th>
-                  <th className="thc text-right">Faturada</th>
-                  <th className="thc text-right">Em aberto</th>
-                  <th className="thc text-right">Valor aberto</th>
-                  <th className="thc">Status</th>
-                  <th className="thc">Análise</th>
-                  <th className="thc">Aprovado em</th>
-                  <th className="thc text-right">Dias</th>
-                </tr>
-              </thead>
-              <tbody>
-                {itens.map((s) => (
-                  <tr key={s.id} className={`border-b border-slate-100 ${sel.has(s.id) ? "bg-brand-50/60" : ""}`}>
-                    <td className="tdc">
+            </Campo>
+            <button type="button" onClick={() => setConfirmaCancelar(true)} disabled={sel.size === 0} className="pgm-botao pgm-botao--perigo">
+              Cancelar sugestões ({sel.size})
+            </button>
+          </div>
+        </div>
+        <Rolagem>
+          <table className="pgm-tabela tabela-fixa">
+            <caption className="sr-only">Sugestões da carteira, {fmtInt(itens.length)} nesta visão.</caption>
+            <thead>
+              <tr>
+                <th scope="col" style={{ width: 44 }}>
+                  <input
+                    type="checkbox"
+                    checked={itens.some((s) => s.status === "aprovada") && itens.filter((s) => s.status === "aprovada").every((s) => sel.has(s.id))}
+                    onChange={() => {
+                      const abertas = itens.filter((s) => s.status === "aprovada");
+                      setSel(abertas.every((s) => sel.has(s.id)) ? new Set() : new Set(abertas.map((s) => s.id)));
+                    }}
+                    aria-label="Selecionar todas as sugestões em aberto"
+                  />
+                </th>
+                <th scope="col">Rota</th><th scope="col">Código</th><th scope="col">Produto</th>
+                <th scope="col" className="pgm-num">Aprovada</th><th scope="col" className="pgm-num">Faturada</th><th scope="col" className="pgm-num">Em aberto</th><th scope="col" className="pgm-num">Valor aberto</th>
+                <th scope="col">Situação</th><th scope="col">Análise</th><th scope="col">Aprovado em</th><th scope="col" className="pgm-num">Dias</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((s) => {
+                const st = situacao(s);
+                const d = dias(s);
+                return (
+                  <tr key={s.id} className={sel.has(s.id) ? "sel" : undefined}>
+                    <td>
                       <input
                         type="checkbox"
                         checked={sel.has(s.id)}
-                        disabled={s.status === "faturada"}
+                        disabled={s.status !== "aprovada"}
+                        aria-label={`Selecionar ${s.produto}`}
                         onChange={() => {
                           const novo = new Set(sel);
                           if (novo.has(s.id)) novo.delete(s.id); else novo.add(s.id);
@@ -239,109 +248,151 @@ export default function Carteira() {
                         }}
                       />
                     </td>
-                    <td className="tdc font-medium">CD{s.cdOrigem} → CD{s.cdDestino}</td>
-                    <td className="tdc">{s.codigoProduto}</td>
-                    <td className="tdc max-w-[240px] truncate" title={s.produto}>{s.produto}</td>
-                    <td className="tdc num">{fmtInt(s.qtd)}</td>
-                    <td className="tdc num text-slate-500">{fmtInt(s.qtdFaturada)}</td>
-                    <td className="tdc num font-semibold">{fmtInt(aberto(s))}</td>
-                    <td className="tdc num">{fmtRs(aberto(s) * s.preco)}</td>
-                    <td className="tdc">
-                      {s.status === "aprovada" && <Badge tom="brand">em aberto</Badge>}
-                      {s.status === "faturada" && <Badge tom="good">faturada</Badge>}
-                      {s.status === "cancelada" && <Badge>cancelada</Badge>}
-                    </td>
-                    <td className="tdc text-slate-500">{s.analiseId}</td>
-                    <td className="tdc text-slate-500">{new Date(s.criadoEm).toLocaleDateString("pt-BR")}</td>
-                    <td className={`tdc num ${dias(s) >= 30 && s.status === "aprovada" ? "font-semibold text-amber-600" : "text-slate-400"}`}>
-                      {s.status === "aprovada" ? fmtInt(dias(s)) : "—"}
-                    </td>
+                    <td><Rota origem={s.cdOrigem} destino={s.cdDestino} /></td>
+                    <td>{s.codigoProduto}</td>
+                    <td className="prod" title={s.produto}>{s.produto}</td>
+                    <td className="pgm-num">{fmtInt(s.qtd)}</td>
+                    <td className="pgm-num">{fmtInt(s.qtdFaturada)}</td>
+                    <td className="pgm-num"><b>{fmtInt(aberto(s))}</b></td>
+                    <td className="pgm-num">{fmtRs(aberto(s) * s.preco)}</td>
+                    <td><Status tom={st.tom}>{st.rotulo}</Status></td>
+                    <td>{s.analiseId}</td>
+                    <td>{new Date(s.criadoEm).toLocaleDateString("pt-BR")}</td>
+                    <td className="pgm-num"><span className="dias" data-velha={s.status === "aprovada" && d >= 30 ? "true" : undefined}>{s.status === "aprovada" ? fmtInt(d) : "—"}</span></td>
                   </tr>
-                ))}
-                {itens.length === 0 && (
-                  <tr><td colSpan={12} className="td text-center text-slate-400">Nenhuma sugestão nesta visão. Aprove linhas no Plano de transferência.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Secao>
-      </div>
+                );
+              })}
+              {itens.length === 0 && (
+                <tr>
+                  <td colSpan={12} style={{ padding: 0, background: "var(--papel)" }}>
+                    <Estado
+                      icone="carteira"
+                      rotulo={status === "aprovada" ? "Carteira vazia" : "Sem resultado"}
+                      titulo={status === "aprovada" ? "Nenhuma sugestão em aberto" : "Nenhuma sugestão nesta visão"}
+                      texto={status === "aprovada" ? "Tudo o que foi aprovado já foi faturado. Aprove linhas no Plano de transferência para a carteira voltar a descontar as próximas análises." : "Troque a situação ou limpe a busca."}
+                      acoes={status === "aprovada" ? <a href="/plano" className="pgm-botao">Abrir o plano</a> : <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => { setQ(""); setStatus("todas"); }}>Ver todas</button>}
+                    />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </Rolagem>
+        {itens.length > 0 && (
+          <div className="tabela-rodape"><span>{fmtInt(itens.length)} sugestão(ões) nesta visão{sel.size > 0 && ` · ${sel.size} selecionada(s)`}</span></div>
+        )}
+      </Secao>
 
       {eventos.length > 0 && (
-        <div className="mt-4">
-          <Secao titulo="Baixas por faturamento" desc="Cada importação confirma o que realmente foi transferido.">
-            <table className="min-w-full">
+        <Secao flush titulo="Baixas por faturamento" desc="Cada importação confirma o que realmente foi transferido">
+          <Rolagem>
+            <table className="pgm-tabela">
               <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="th">Quando</th><th className="th">Quem</th><th className="th">Arquivo</th>
-                  <th className="th text-right">Linhas</th><th className="th text-right">Casadas</th>
-                  <th className="th text-right">Sem match</th><th className="th text-right">Un. baixadas</th>
-                </tr>
+                <tr><th>Quando</th><th>Quem</th><th>Arquivo</th><th className="pgm-num">Linhas</th><th className="pgm-num">Casadas</th><th className="pgm-num">Sem correspondência</th><th className="pgm-num">Unidades baixadas</th></tr>
               </thead>
               <tbody>
                 {eventos.map((e) => (
-                  <tr key={e.id} className="border-b border-slate-100">
-                    <td className="td">{new Date(e.em).toLocaleString("pt-BR")}</td>
-                    <td className="td">{e.por}</td>
-                    <td className="td max-w-xs truncate">{e.arquivo}</td>
-                    <td className="td num">{fmtInt(e.linhas)}</td>
-                    <td className="td num">{fmtInt(e.casadas)}</td>
-                    <td className="td num">{fmtInt(e.semCorrespondencia)}</td>
-                    <td className="td num">{fmtInt(e.qtdBaixada)}</td>
+                  <tr key={e.id}>
+                    <td>{new Date(e.em).toLocaleString("pt-BR")}</td>
+                    <td>{e.por}</td>
+                    <td className="prod" style={{ maxWidth: 320 }} title={e.arquivo}>{e.arquivo}</td>
+                    <td className="pgm-num">{fmtInt(e.linhas)}</td>
+                    <td className="pgm-num">{fmtInt(e.casadas)}</td>
+                    <td className="pgm-num">{e.semCorrespondencia > 0 ? <Pill tom="ambar" pequena>{fmtInt(e.semCorrespondencia)}</Pill> : "0"}</td>
+                    <td className="pgm-num">{fmtInt(e.qtdBaixada)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </Secao>
-        </div>
+          </Rolagem>
+        </Secao>
       )}
 
+      <Fonte>Fonte: carteira de sugestões ({data.durable ? "armazenamento durável" : "em memória"}){dataBase && ` · base de CDs com posição de ${dataBase}`} · envelhecimento = mais de 30 dias em aberto.</Fonte>
+
+      {/* ------------------------ Modal: cancelar sugestões ---------------------- */}
+      <Modal
+        aberto={confirmaCancelar}
+        titulo={`Cancelar ${sel.size} sugest${sel.size === 1 ? "ão" : "ões"}?`}
+        sub={`O volume volta a ficar disponível: ${fmtInt(unSelecionadas)} unidades deixam de ser reservadas na origem e saem do trânsito do destino.`}
+        onFechar={() => setConfirmaCancelar(false)}
+        largura={520}
+        rodape={
+          <>
+            <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => setConfirmaCancelar(false)}>Manter</button>
+            <button type="button" className="pgm-botao pgm-botao--perigo" disabled={cancelando} onClick={cancelar}>
+              {cancelando ? "Cancelando…" : `Cancelar ${sel.size} sugest${sel.size === 1 ? "ão" : "ões"}`}
+            </button>
+          </>
+        }
+      >
+        <div className="mb-lista">
+          {selecionadas.slice(0, 6).map((s) => (
+            <div key={s.id} className="mb-item">
+              <div><b>{s.produto} · {s.codigoProduto}</b><span>CD {s.cdOrigem} → CD {s.cdDestino} · {situacao(s).rotulo.toLowerCase()}</span></div>
+              <span className="v">{fmtInt(aberto(s))} un</span>
+            </div>
+          ))}
+          {selecionadas.length > 6 && <div className="mb-item"><div><b>Mais {selecionadas.length - 6} sugestão(ões)</b></div><span className="v"></span></div>}
+        </div>
+        <Alert tom="warn" titulo="Sem volta">A sugestão cancelada fica no histórico, mas não pode ser reaberta. Para transferir de novo, rode uma análise.</Alert>
+      </Modal>
+
       {/* ---------------------- Modal: base de faturamento ---------------------- */}
-      <Modal aberto={modal} titulo="Importar base de faturamento" onFechar={() => setModal(false)}>
-        <p className="text-sm text-slate-600">
-          A planilha de faturamento confirma o que <b>já foi transferido</b>. As sugestões correspondentes recebem baixa
-          e param de descontar as próximas análises — a partir daí, as bases atualizadas já trazem a saída na origem e a
-          pendência no destino.
-        </p>
-
-        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-          <div className="label mb-1">Colunas esperadas</div>
-          CD origem · CD destino · código do produto · quantidade faturada · (opcional) documento/NF e data.
-          O casamento é por <b>rota + produto</b>, na ordem de aprovação.
+      <Modal
+        aberto={modal}
+        titulo="Importar base de faturamento"
+        sub={<>A planilha confirma o que <b>já foi transferido</b>. As sugestões correspondentes recebem baixa e param de descontar as próximas análises.</>}
+        onFechar={() => setModal(false)}
+        largura={760}
+        rodape={
+          <>
+            <span className="nota">{previa ? "Prévia: nada foi gravado ainda." : achados ? "Resultado da última operação." : "Escolha o arquivo e valide antes de aplicar."}</span>
+            <button type="button" onClick={() => setModal(false)} className="pgm-botao pgm-botao--secundario">Fechar</button>
+            <button type="button" onClick={() => enviarFaturamento(true)} disabled={!fatFile || enviando} className="pgm-botao pgm-botao--secundario">Validar</button>
+            <button type="button" onClick={() => enviarFaturamento(false)} disabled={!fatFile || enviando} className="pgm-botao">Aplicar baixa</button>
+          </>
+        }
+      >
+        <div className="colunas">
+          <b>Colunas esperadas</b>
+          CD origem · CD destino · código do produto · quantidade faturada · (opcional) documento/NF e data. O casamento é por <strong>rota + produto</strong>, na ordem de aprovação, com baixa parcial quando a quantidade faturada é menor que a aprovada.
         </div>
 
-        <div className="mt-3">
-          <input ref={fatRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" onChange={(e) => { setFatFile(e.target.files?.[0] ?? null); setPrevia(null); setAchados(null); }} className="input w-full text-xs" />
+        <input ref={fatRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="sr-only" id="arq-fat" onChange={(e) => { setFatFile(e.target.files?.[0] ?? null); setPrevia(null); setAchados(null); }} />
+        <div className="upload" data-ok={fatFile ? "true" : undefined}>
+          <span className="upload__ico"><Icone nome={fatFile ? "check" : "upload"} tamanho={22} /></span>
+          <div className="upload__txt">
+            <b>{fatFile ? fatFile.name : "Nenhum arquivo escolhido"}</b>
+            <span>{fatFile ? `${(fatFile.size / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB · pronto para validar` : "CSV, XLSX ou XLSB"}</span>
+          </div>
+          <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => fatRef.current?.click()}>{fatFile ? "Trocar" : "Escolher arquivo"}</button>
         </div>
 
-        {enviando && <div className="mt-3"><Progress pct={progresso} label="Processando…" /></div>}
+        {enviando && <Progress pct={progresso} label="Enviando e processando…" />}
 
         {previa && (
-          <div className="mt-3">
-            <Alert tom="info">
-              Prévia: <b>{fmtInt(previa.linhas)}</b> linhas · <b>{fmtInt(previa.quantidadeTotal)}</b> unidades ·
-              rotas: {previa.rotas.slice(0, 10).join(", ")}{previa.rotas.length > 10 ? "…" : ""}
-            </Alert>
+          <div>
+            <p className="pgm-campo__rotulo" style={{ margin: "0 0 8px" }}>Prévia da baixa</p>
+            <div className="resumo-previa">
+              <div><b>{fmtInt(previa.linhas)}</b><span>linhas no arquivo</span></div>
+              <div><b>{fmtInt(previa.quantidadeTotal)}</b><span>unidades a baixar</span></div>
+              <div><b>{previa.rotas.length}</b><span>rota(s): {previa.rotas.slice(0, 6).join(", ")}{previa.rotas.length > 6 ? "…" : ""}</span></div>
+            </div>
           </div>
         )}
 
-        {achados && (
-          <div className="mt-3 flex flex-col gap-1.5">
+        {achados && achados.length > 0 && (
+          <div className="flex flex-col gap-3">
             {achados.map((a, i) => (
-              <Alert key={i} tom={nivelTom[a.nivel]}>
-                <b>{a.mensagem}</b>
-                {a.exemplos && a.exemplos.length > 0 && <div className="mt-0.5 text-xs opacity-80">{a.exemplos.slice(0, 6).join(" · ")}</div>}
+              <Alert key={i} tom={nivelTom[a.nivel]} titulo={`${a.nivel === "erro" ? "Erro" : a.nivel === "aviso" ? "Atenção" : "Informação"}${a.qtd > 0 ? ` · ${fmtInt(a.qtd)}` : ""}`}>
+                {a.mensagem}
+                {a.exemplos && a.exemplos.length > 0 && <> Exemplos: {a.exemplos.slice(0, 6).join(" · ")}.</>}
               </Alert>
             ))}
           </div>
         )}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => setModal(false)} className="btn-ghost">Fechar</button>
-          <button onClick={() => enviarFaturamento(true)} disabled={!fatFile || enviando} className="btn-ghost">Validar</button>
-          <button onClick={() => enviarFaturamento(false)} disabled={!fatFile || enviando} className="btn-primary">Aplicar baixa</button>
-        </div>
       </Modal>
-    </div>
+    </>
   );
 }

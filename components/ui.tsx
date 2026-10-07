@@ -1,6 +1,7 @@
 "use client";
 
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
+import { Icone, type NomeIcone } from "@/components/icones";
 
 /** Fecha o que está aberto com Escape. Compartilhado pelo modal e pelo menu. */
 export function useEscape(ativo: boolean, onFechar: () => void) {
@@ -14,56 +15,134 @@ export function useEscape(ativo: boolean, onFechar: () => void) {
   }, [ativo, onFechar]);
 }
 
-export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: ReactNode; right?: ReactNode }) {
+/* ------------------------------------------------------------------------- */
+/* Cabeçalho da tela                                                          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Título que afirma o achado (com número), subtítulo de contexto e ações à
+ * direita. Um por tela. Use <em> no título só para o termo em alerta.
+ */
+export function PageHeader({ title, subtitle, right }: { title: ReactNode; subtitle?: ReactNode; right?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">{title}</h1>
-        {subtitle && <div className="mt-0.5 text-sm text-slate-500">{subtitle}</div>}
+    <div className="titulo-linha">
+      <div className="pgm-cabecalho__textos" style={{ flex: 1, minWidth: 280 }}>
+        <h1 className="pgm-cabecalho__titulo">{title}</h1>
+        {subtitle && <p className="pgm-cabecalho__sub">{subtitle}</p>}
       </div>
-      {right}
+      {right && <div className="app-acoes">{right}</div>}
     </div>
   );
 }
 
-export function Kpi({
+/* ------------------------------------------------------------------------- */
+/* KPI                                                                        */
+/* ------------------------------------------------------------------------- */
+
+type TomKpi = "default" | "brand" | "azul" | "warn" | "good" | "alerta";
+const KPI_CLASSE: Record<TomKpi, string> = {
+  default: "",
+  brand: "",
+  azul: "",
+  warn: "pgm-kpi--atencao",
+  good: "pgm-kpi--melhora",
+  alerta: "pgm-kpi--alerta",
+};
+
+export function Kpi({ titulo, valor, sub, tom = "default", badge }: { titulo: string; valor: string; sub?: ReactNode; tom?: TomKpi; badge?: ReactNode }) {
+  return (
+    <div className={`pgm-kpi ${KPI_CLASSE[tom]}`}>
+      <span className="pgm-kpi__valor">{valor}</span>
+      <div className="pgm-kpi__rotulo">{titulo}</div>
+      {sub && <div className="pgm-kpi__apoio">{sub}</div>}
+      {badge && <span className="pgm-kpi__badge">{badge}</span>}
+    </div>
+  );
+}
+
+/** Faixa de KPIs: 4 colunas no desktop, 2 e 1 conforme a largura. */
+export function Kpis({ children, label }: { children: ReactNode; label?: string }) {
+  return (
+    <section className="app-kpis app-kpis--4" aria-label={label}>
+      {children}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Cartão / seção                                                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Cartão com título de painel e descrição. `flush` cola uma tabela nas bordas
+ * (o cabeçalho ganha o respiro interno e o corpo vai sem padding).
+ */
+export function Secao({
   titulo,
-  valor,
-  sub,
-  tom = "default",
+  desc,
+  right,
+  children,
+  flush = false,
+  id,
 }: {
-  titulo: string;
-  valor: string;
-  sub?: ReactNode;
-  tom?: "default" | "brand" | "warn" | "good" | "azul";
+  titulo: ReactNode;
+  desc?: ReactNode;
+  right?: ReactNode;
+  children: ReactNode;
+  flush?: boolean;
+  id?: string;
 }) {
-  const cor = {
-    default: "text-slate-900",
-    brand: "text-brand-700",
-    azul: "text-azul-600",
-    warn: "text-amber-600",
-    good: "text-emerald-600",
-  }[tom];
   return (
-    <div className="card p-4">
-      <div className="label">{titulo}</div>
-      <div className={`mt-1 text-2xl font-bold ${cor}`}>{valor}</div>
-      {sub && <div className="mt-0.5 text-xs text-slate-500">{sub}</div>}
-    </div>
-  );
-}
-
-export function Secao({ titulo, desc, right, children }: { titulo: string; desc?: ReactNode; right?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="card min-w-0 p-4">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+    <section className={`app-card ${flush ? "app-card--flush" : ""}`} id={id}>
+      <div className="app-card__cab">
         <div>
-          <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">{titulo}</h2>
-          {desc && <p className="mt-0.5 text-xs text-slate-500">{desc}</p>}
+          <h2 className="app-card__titulo">{titulo}</h2>
+          {desc && <p className="app-card__sub">{desc}</p>}
         </div>
-        {right}
+        {right && <div className="app-card__lado" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>{right}</div>}
       </div>
       {children}
+    </section>
+  );
+}
+
+/** Caixa de rolagem horizontal para tabelas largas. */
+export function Rolagem({ children }: { children: ReactNode }) {
+  return <div className="tabela-rolagem thin-scroll">{children}</div>;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Estados: erro, vazio, carregando                                           */
+/* ------------------------------------------------------------------------- */
+
+type TomEstado = "info" | "atencao" | "erro";
+
+/**
+ * Estado de tela com ícone, rótulo, título e ações. Nunca tela branca: toda
+ * situação tem palavra, explicação e a próxima ação.
+ */
+export function Estado({
+  tom = "info",
+  icone = "info",
+  rotulo,
+  titulo,
+  texto,
+  acoes,
+}: {
+  tom?: TomEstado;
+  icone?: NomeIcone;
+  rotulo?: string;
+  titulo: string;
+  texto?: ReactNode;
+  acoes?: ReactNode;
+}) {
+  return (
+    <section className="estado" data-tom={tom}>
+      <span className="estado__ico"><Icone nome={icone} tamanho={24} /></span>
+      {rotulo && <span className="rotulo-ctx">{rotulo}</span>}
+      <h3>{titulo}</h3>
+      {texto && <p>{texto}</p>}
+      {acoes && <div className="acoes">{acoes}</div>}
     </section>
   );
 }
@@ -74,13 +153,14 @@ export function Secao({ titulo, desc, right, children }: { titulo: string; desc?
  */
 export function ErroCarga({ erro, onTentar }: { erro: string; onTentar: () => void }) {
   return (
-    <div className="card p-8 text-center">
-      <p className="text-sm font-medium text-slate-700">Não foi possível carregar esta tela.</p>
-      <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
-        {erro} — a conexão pode ter caído ou o servidor pode estar reiniciando.
-      </p>
-      <button onClick={onTentar} className="btn-primary mt-4 inline-flex">↻ Tentar de novo</button>
-    </div>
+    <Estado
+      tom="erro"
+      icone="semRede"
+      rotulo="Falha de rede"
+      titulo="Não foi possível carregar esta tela"
+      texto={<>{erro}. A conexão pode ter caído ou o servidor pode estar reiniciando. Nada foi perdido.</>}
+      acoes={<button onClick={onTentar} className="pgm-botao" type="button">Tentar de novo</button>}
+    />
   );
 }
 
@@ -88,8 +168,8 @@ export function ErroCarga({ erro, onTentar }: { erro: string; onTentar: () => vo
 export function Revalidando({ ativo, label = "Atualizando…" }: { ativo: boolean; label?: string }) {
   if (!ativo) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-slate-400" role="status" aria-live="polite">
-      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-brand-500" />
+    <span className="inline-flex items-center gap-2 text-xs font-semibold text-ink-2" role="status" aria-live="polite">
+      <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2, marginRight: 0 }} />
       {label}
     </span>
   );
@@ -97,118 +177,257 @@ export function Revalidando({ ativo, label = "Atualizando…" }: { ativo: boolea
 
 export function Spinner({ label }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 text-sm text-slate-500">
-      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
-      {label}
-    </div>
-  );
-}
-
-export function Progress({ pct, label }: { pct: number; label?: string }) {
-  return (
-    <div className="w-full">
-      {label && <div className="mb-1 text-xs text-slate-500">{label}</div>}
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full bg-brand-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+    <div className="estado estado--faixa" style={{ flexDirection: "row", alignItems: "center", gap: 16 }} role="status" aria-live="polite">
+      <span className="spinner" aria-hidden />
+      <div style={{ flex: 1 }}>
+        <span className="rotulo-ctx">Carregando</span>
+        <h3 style={{ marginTop: 4 }}>{label ?? "Abrindo a tela…"}</h3>
+        <div className="esqueleto" style={{ marginTop: 12, maxWidth: 560 }}><i /><i /><i /></div>
       </div>
     </div>
   );
 }
 
-/** Barra de cobertura (0..1) — usada nos destinos. */
-export function Barra({ pct, tom = "brand" }: { pct: number; tom?: "brand" | "azul" | "good" }) {
-  const cor = { brand: "bg-brand-500", azul: "bg-azul-500", good: "bg-emerald-500" }[tom];
+export function Progress({ pct, label }: { pct: number; label?: string }) {
+  const p = Math.min(100, Math.max(0, pct));
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-      <div className={`h-full ${cor}`} style={{ width: `${Math.min(100, Math.max(0, pct * 100))}%` }} />
+    <div className="progresso" style={{ width: "100%" }}>
+      <div className="progresso__linha">
+        <span>{label ?? "Processando…"}</span>
+        <span>{Math.round(p)}%</span>
+      </div>
+      <div className="progresso__trilho" role="progressbar" aria-valuenow={Math.round(p)} aria-valuemin={0} aria-valuemax={100} aria-label={label ?? "Progresso"}>
+        <div className="progresso__barra" style={{ width: `${p}%` }} />
+      </div>
     </div>
   );
 }
 
-export function Alert({ tom = "warn", children }: { tom?: "warn" | "erro" | "info" | "good"; children: ReactNode }) {
-  const cls = {
-    warn: "bg-amber-50 border-amber-200 text-amber-800",
-    erro: "bg-rose-50 border-rose-200 text-rose-800",
-    info: "bg-sky-50 border-sky-200 text-sky-800",
-    good: "bg-emerald-50 border-emerald-200 text-emerald-800",
-  }[tom];
-  return <div className={`rounded-lg border px-3 py-2 text-sm ${cls}`}>{children}</div>;
+/* ------------------------------------------------------------------------- */
+/* Barras                                                                     */
+/* ------------------------------------------------------------------------- */
+
+type TomBarra = "brand" | "azul" | "good" | "atencao" | "alto";
+const BARRA_ESTADO: Record<TomBarra, string | undefined> = { brand: undefined, azul: undefined, good: "ok", atencao: "atencao", alto: "alto" };
+
+/** Barra de percentual (0..1) com o número ao lado. O valor sempre aparece escrito. */
+export function Barra({ pct, tom = "brand", mostrarValor = true }: { pct: number; tom?: TomBarra; mostrarValor?: boolean }) {
+  const p = Math.min(100, Math.max(0, pct * 100));
+  const estado = BARRA_ESTADO[tom];
+  return (
+    <div className="pct">
+      <div className="pct__trilho">
+        <div className="pct__barra" data-estado={estado} style={{ width: `${p}%` }} />
+      </div>
+      {mostrarValor && <span className="pct__v" data-estado={estado}>{Math.round(p)}%</span>}
+    </div>
+  );
 }
 
-export function Badge({ tom = "slate", children }: { tom?: "slate" | "brand" | "azul" | "good" | "warn"; children: ReactNode }) {
-  const cls = {
-    slate: "bg-slate-100 text-slate-700",
-    brand: "bg-brand-50 text-brand-700",
-    azul: "bg-azul-50 text-azul-700",
-    good: "bg-emerald-50 text-emerald-700",
-    warn: "bg-amber-50 text-amber-700",
-  }[tom];
-  return <span className={`badge ${cls}`}>{children}</span>;
+/* ------------------------------------------------------------------------- */
+/* Aviso                                                                      */
+/* ------------------------------------------------------------------------- */
+
+type TomAviso = "warn" | "erro" | "info" | "good";
+const AVISO: Record<TomAviso, { tom: string; icone: NomeIcone; rotulo: string }> = {
+  warn: { tom: "atencao", icone: "atencao", rotulo: "Atenção" },
+  erro: { tom: "erro", icone: "erro", rotulo: "Falha" },
+  info: { tom: "info", icone: "info", rotulo: "Informação" },
+  good: { tom: "ok", icone: "ok", rotulo: "Pronto" },
+};
+
+/** Aviso com ícone, palavra e texto: a cor nunca viaja sozinha. */
+export function Alert({ tom = "warn", titulo, acao, children }: { tom?: TomAviso; titulo?: string; acao?: ReactNode; children: ReactNode }) {
+  const a = AVISO[tom];
+  return (
+    <div className="aviso" data-tom={a.tom} role={tom === "erro" ? "alert" : undefined}>
+      <span className="aviso__ico"><Icone nome={a.icone} tamanho={16} espessura={2.4} /></span>
+      <div className="aviso__txt">
+        <b>{titulo ?? a.rotulo}</b>
+        <p>{children}</p>
+      </div>
+      {acao && <span className="aviso__acao">{acao}</span>}
+    </div>
+  );
 }
+
+/* ------------------------------------------------------------------------- */
+/* Rótulos de estado                                                          */
+/* ------------------------------------------------------------------------- */
+
+type TomBadge = "slate" | "brand" | "azul" | "good" | "warn" | "risco";
+const BADGE: Record<TomBadge, string | undefined> = { slate: undefined, brand: "marca", azul: "marca", good: "ok", warn: "atencao", risco: "risco" };
+
+export function Badge({ tom = "slate", children }: { tom?: TomBadge; children: ReactNode }) {
+  return <span className="badge" data-badge={BADGE[tom]}>{children}</span>;
+}
+
+export type TomStatus = "aberta" | "faturada" | "parcial" | "velha" | "cancelada" | "gargalo" | "concluido";
+const STATUS: Record<TomStatus, string> = {
+  aberta: "pgm-status--aberta",
+  faturada: "pgm-status--faturada",
+  parcial: "pgm-status--parcial",
+  velha: "pgm-status--velha",
+  cancelada: "pgm-status--cancelada",
+  gargalo: "pgm-status--atrasado",
+  concluido: "pgm-status--concluido",
+};
+
+/** Pill de situação. A palavra vai junto da cor, sempre. */
+export function Status({ tom, children }: { tom: TomStatus; children: ReactNode }) {
+  return <span className={`pgm-status ${STATUS[tom]}`}>{children}</span>;
+}
+
+type TomPill = "verde" | "ambar" | "coral" | "critico";
+export function Pill({ tom, children, pequena = false }: { tom: TomPill; children: ReactNode; pequena?: boolean }) {
+  return (
+    <span className={`pgm-pill pgm-pill--${tom}`} style={pequena ? { fontSize: 12, padding: "2px 10px" } : undefined}>
+      {children}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Insight, decisão, ressalvas e fonte                                        */
+/* ------------------------------------------------------------------------- */
+
+export function Insight({ children }: { children: ReactNode }) {
+  return <div className="pgm-insight">{children}</div>;
+}
+
+export function Decisao({ children }: { children: ReactNode }) {
+  return (
+    <div className="pgm-decisao">
+      <span className="pgm-decisao__rotulo">Decisão</span>
+      <span className="pgm-decisao__texto">{children}</span>
+    </div>
+  );
+}
+
+export function Ressalvas({ itens }: { itens: ReactNode[] }) {
+  const lista = itens.filter(Boolean);
+  if (lista.length === 0) return null;
+  return (
+    <div className="pgm-ressalvas">
+      <span className="pgm-ressalvas__rotulo">Ressalvas</span>
+      <ul>
+        {lista.map((r, i) => <li key={i}>{r}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+export function Fonte({ children }: { children: ReactNode }) {
+  return <p className="app-fonte">{children}</p>;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Controles                                                                  */
+/* ------------------------------------------------------------------------- */
 
 /**
  * Chave liga/desliga de um grupo de regras. Desligar NÃO apaga a configuração —
- * os valores continuam salvos, prontos para religar.
+ * os valores continuam salvos, prontos para religar. O estado vai escrito.
  */
-export function Chave({
-  ligada,
-  onToggle,
-  children,
-}: {
-  ligada: boolean;
-  onToggle: (v: boolean) => void;
-  children: ReactNode;
-}) {
+export function Chave({ ligada, onToggle, children }: { ligada: boolean; onToggle: (v: boolean) => void; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={ligada}
-      onClick={() => onToggle(!ligada)}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-        ligada
-          ? "border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"
-          : "border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100"
-      }`}
-    >
-      <span
-        className={`inline-flex h-3.5 w-6 shrink-0 items-center rounded-full px-0.5 transition-colors ${
-          ligada ? "bg-brand-500" : "bg-slate-300"
-        }`}
-      >
-        <span className={`h-2.5 w-2.5 rounded-full bg-white transition-transform ${ligada ? "translate-x-2.5" : ""}`} />
-      </span>
-      {children}
+    <button type="button" role="switch" aria-checked={ligada} onClick={() => onToggle(!ligada)} className="chave">
+      <span className="chave__trilho" />
+      <span className="chave__estado">{ligada ? "Ligada" : "Desligada"}</span>
+      <span>{children}</span>
     </button>
   );
 }
 
+/** Controle segmentado: uma escolha entre poucas opções, sempre uma ativa. */
+export function Seg<T extends string>({ opcoes, valor, onChange, label }: { opcoes: { valor: T; rotulo: string }[]; valor: T; onChange: (v: T) => void; label: string }) {
+  return (
+    <div className="seg" role="group" aria-label={label}>
+      {opcoes.map((o) => (
+        <button key={o.valor} type="button" aria-pressed={valor === o.valor} onClick={() => onChange(o.valor)}>
+          {o.rotulo}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Campo com rótulo em maiúsculas e ajuda opcional. */
+export function Campo({ rotulo, ajuda, htmlFor, children, style }: { rotulo: ReactNode; ajuda?: ReactNode; htmlFor?: string; children: ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div className="pgm-campo" style={style}>
+      <label className="pgm-campo__rotulo" htmlFor={htmlFor}>{rotulo}</label>
+      {children}
+      {ajuda && <span className="pgm-campo__ajuda">{ajuda}</span>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* CD e rota                                                                  */
+/* ------------------------------------------------------------------------- */
+
+export function Cd({ n, ordem }: { n: number | string; ordem?: string }) {
+  return (
+    <span className="cd">
+      {ordem && <i>{ordem}</i>}CD {n}
+    </span>
+  );
+}
+
+export function Rota({ origem, destino }: { origem: number | string; destino: number | string }) {
+  return (
+    <span className="rota">
+      CD {origem} <Icone nome="seta" tamanho={14} espessura={2.4} /> CD {destino}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Modal                                                                      */
+/* ------------------------------------------------------------------------- */
+
 export function Modal({
   aberto,
   titulo,
+  sub,
   onFechar,
   children,
-  largura = "max-w-2xl",
+  rodape,
+  largura = 720,
 }: {
   aberto: boolean;
   titulo: string;
+  sub?: ReactNode;
   onFechar: () => void;
   children: ReactNode;
-  largura?: string;
+  rodape?: ReactNode;
+  /** Largura em px ou classe antiga do Tailwind (ignorada). */
+  largura?: number | string;
 }) {
   useEscape(aberto, onFechar);
+  // Ao abrir, o foco vai para o modal: o Tab seguinte percorre o diálogo, não a página atrás.
+  const fecharRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (aberto) fecharRef.current?.focus();
+  }, [aberto]);
 
   if (!aberto) return null;
+  const w = typeof largura === "number" ? largura : 720;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-16">
-      <div className={`card w-full ${largura} p-5 shadow-xl`} role="dialog" aria-modal="true">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 className="text-base font-bold text-slate-900">{titulo}</h2>
-          <button onClick={onFechar} className="rounded-md px-2 py-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Fechar">
-            ✕
+    <div className="scrim" style={{ position: "fixed", zIndex: 50, alignItems: "flex-start", padding: "48px 16px", overflowY: "auto" }} onClick={onFechar}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-titulo" style={{ width: "100%", maxWidth: w }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal__cab">
+          <div>
+            <h2 id="modal-titulo">{titulo}</h2>
+            {sub && <p>{sub}</p>}
+          </div>
+          <button type="button" ref={fecharRef} onClick={onFechar} className="modal__x" aria-label="Fechar">
+            <Icone nome="fechar" espessura={2.2} />
           </button>
         </div>
-        {children}
+        <div className="modal__corpo">{children}</div>
+        {rodape && <div className="modal__rod">{rodape}</div>}
       </div>
     </div>
   );

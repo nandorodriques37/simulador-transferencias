@@ -1,6 +1,7 @@
 "use client";
 
 import { fmtInt, fmtRsCompacto } from "@/lib/format";
+import { Icone } from "@/components/icones";
 
 export interface CdInfo {
   cd: number;
@@ -51,76 +52,60 @@ export function SequenciaCds({
     const i = info[cd];
     if (!i) return null;
     return origem
-      ? { qtd: i.excessoQtd, rs: i.excessoRs, rotulo: "excesso disponível", extra: i.comprometidoSaida }
-      : { qtd: i.faltaQtd, rs: i.faltaRs, rotulo: "falta p/ objetivo", extra: i.emTransito };
+      ? { qtd: i.excessoQtd, rs: i.excessoRs, rotulo: "Excesso disponível", extra: i.comprometidoSaida, extraRotulo: "comprometido" }
+      : { qtd: i.faltaQtd, rs: i.faltaRs, rotulo: "Falta para o objetivo", extra: i.emTransito, extraRotulo: "em trânsito" };
   };
 
   return (
-    <div>
-      <ol className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-4">
+      <ol className="seq" aria-label={origem ? "Sequência das origens" : "Ordem dos destinos"}>
         {selecionados.map((cd, i) => {
           const m = metrica(cd);
           const conflito = excluir.includes(cd);
           return (
-            <li
-              key={cd}
-              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
-                conflito ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-white"
-              }`}
-            >
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${origem ? "bg-azul-600 text-white" : "bg-brand-500 text-white"}`}>
-                {i + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-slate-800">CD {cd}</div>
+            <li key={cd} className="seq__item" data-conflito={conflito ? "true" : undefined}>
+              <span className="seq__n">{i + 1}</span>
+              <div className="seq__info">
+                <b>CD {cd}</b>
                 {m && (
-                  <div className="text-[11px] text-slate-500">
+                  <span>
                     {m.rotulo}: {fmtInt(m.qtd)} un · {fmtRsCompacto(m.rs)}
-                    {m.extra > 0 && (
-                      <span className="ml-1 text-amber-600">
-                        · {origem ? "comprometido" : "em trânsito"}: {fmtInt(m.extra)} un
-                      </span>
-                    )}
-                  </div>
+                    {m.extra > 0 && <> · <em>{m.extraRotulo}: {fmtInt(m.extra)} un</em></>}
+                    {conflito && <> · <em>também é origem</em></>}
+                  </span>
                 )}
               </div>
-              <div className="flex shrink-0 items-center gap-0.5">
-                <button type="button" onClick={() => mover(i, -1)} disabled={i === 0} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30" aria-label="Subir">
-                  ▲
+              <div className="seq__acoes">
+                <button type="button" className="btn-icone" onClick={() => mover(i, -1)} disabled={i === 0} aria-label={`Subir CD ${cd}`}>
+                  <Icone nome="cima" tamanho={18} espessura={2.4} />
                 </button>
-                <button type="button" onClick={() => mover(i, 1)} disabled={i === selecionados.length - 1} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30" aria-label="Descer">
-                  ▼
+                <button type="button" className="btn-icone" onClick={() => mover(i, 1)} disabled={i === selecionados.length - 1} aria-label={`Descer CD ${cd}`}>
+                  <Icone nome="baixo" tamanho={18} espessura={2.4} />
                 </button>
-                <button type="button" onClick={() => remover(cd)} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label="Remover">
-                  ✕
+                <button type="button" className="btn-icone btn-icone--perigo" onClick={() => remover(cd)} aria-label={`Remover CD ${cd}`}>
+                  <Icone nome="fechar" tamanho={18} espessura={2.4} />
                 </button>
               </div>
             </li>
           );
         })}
         {selecionados.length === 0 && (
-          <li className="rounded-lg border border-dashed border-slate-300 px-3 py-3 text-center text-xs text-slate-400">
-            Nenhum CD selecionado como {origem ? "origem" : "destino"}.
+          <li className="upload" style={{ justifyContent: "center", color: "var(--ink-2)", fontSize: 14 }}>
+            Nenhum CD escolhido como {origem ? "origem" : "destino"}. Adicione abaixo.
           </li>
         )}
       </ol>
 
       {naoSelecionados.length > 0 && (
-        <div className="mt-2.5">
-          <div className="label mb-1">Adicionar</div>
-          <div className="flex flex-wrap gap-1.5">
+        <div>
+          <p className="pgm-campo__rotulo" style={{ margin: "0 0 8px" }}>Adicionar</p>
+          <div className="seq-add">
             {naoSelecionados.map((cd) => {
               const m = metrica(cd);
               return (
-                <button
-                  key={cd}
-                  type="button"
-                  onClick={() => adicionar(cd)}
-                  title={m ? `${m.rotulo}: ${fmtInt(m.qtd)} un` : undefined}
-                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50"
-                >
+                <button key={cd} type="button" onClick={() => adicionar(cd)} title={m ? `${m.rotulo}: ${fmtInt(m.qtd)} un` : undefined}>
                   + CD {cd}
-                  {m && m.qtd > 0 && <span className="ml-1 text-slate-400">{fmtRsCompacto(m.rs)}</span>}
+                  {m && <small>{m.qtd > 0 ? fmtRsCompacto(m.rs) : origem ? "sem excesso" : "sem falta"}</small>}
                 </button>
               );
             })}

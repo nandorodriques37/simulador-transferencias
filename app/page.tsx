@@ -1,8 +1,8 @@
 "use client";
 
-import { CSSProperties, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { Alert, Badge, Barra, ErroCarga, Kpi, PageHeader, Revalidando, Secao, Spinner } from "@/components/ui";
+import { Alert, Badge, Barra, Cd, Decisao, ErroCarga, Estado, Fonte, Insight, Kpi, Kpis, PageHeader, Pill, Ressalvas, Revalidando, Rolagem, Rota, Secao, Seg, Spinner } from "@/components/ui";
 import { fmtCap, fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes, rotuloRota } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 
@@ -63,6 +63,24 @@ interface AnaliseHistorico {
   aprovado?: { linhas: number; qtd: number; valor: number; em: string };
 }
 
+/** Barra de utilização de capacidade: comprometido (carteira) + usado nesta análise. */
+function Utilizacao({ limite, comprometido, usado }: { limite: number; comprometido: number; usado: number }) {
+  if (limite <= 0) return <span className="text-xs text-ink-3">sem limite</span>;
+  const comp = Math.min(100, (comprometido / limite) * 100);
+  const uso = Math.min(100 - comp, (usado / limite) * 100);
+  const total = (comprometido + usado) / limite;
+  const estado = total >= 0.999 ? "alto" : total >= 0.85 ? "atencao" : undefined;
+  return (
+    <div className="util" data-estado={estado}>
+      <div className="util__trilho">
+        <span className="util__comp" style={{ width: `${comp}%` }} />
+        <span className="util__uso" style={{ left: `${comp}%`, width: `${uso}%` }} />
+      </div>
+      <span className="util__v">{fmtPct(total, 0)}</span>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [cobertura, setCobertura] = useState<"total" | "acima_limite">("total");
   const painel = useApi<DashResp>(`/api/dashboard?cobertura=${cobertura}`);
@@ -71,24 +89,22 @@ export default function Dashboard() {
   const historico = hist.data?.analises ?? [];
   const duravel = !!hist.data?.duravel;
 
-  if (painel.carregando) return <div className="pt-10"><Spinner label="Carregando painel…" /></div>;
+  if (painel.carregando) return <Spinner label="Abrindo o dashboard…" />;
   if (painel.erro && !data) return <ErroCarga erro={painel.erro} onTentar={painel.recarregar} />;
   if (!data) return null;
 
   if (data.semAnalise || data.erro) {
     return (
-      <div>
-        <PageHeader title="Dashboard executivo" subtitle="Resultado da última análise de rede." />
-        <div className="card p-8 text-center">
-          <p className="text-sm text-slate-600">Nenhuma análise rodada ainda nesta instância.</p>
-          <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
-            A base e o resultado ficam na memória do servidor. Depois de um novo deploy — ou de um período ocioso —
-            é preciso importar a base e rodar a análise de novo. A carteira de sugestões aprovadas, essa sim, é
-            persistida no banco.
-          </p>
-          <Link href="/analise" className="btn-primary mt-4 inline-flex">Configurar e rodar a primeira análise</Link>
-        </div>
-      </div>
+      <>
+        <PageHeader title="Nenhuma análise rodada ainda" subtitle="O dashboard mostra o resultado da última análise de rede desta instância." />
+        <Estado
+          icone="analise"
+          rotulo="Dashboard"
+          titulo="Defina origens e destinos e rode a primeira análise"
+          texto="A base e o resultado ficam na memória do servidor. Depois de um novo deploy, ou de um período ocioso, é preciso importar a base e rodar a análise de novo. A carteira de sugestões aprovadas, essa sim, fica no banco."
+          acoes={<Link href="/analise" className="pgm-botao">Nova análise</Link>}
+        />
+      </>
     );
   }
 
@@ -98,424 +114,419 @@ export default function Dashboard() {
   // Matriz origem × destino (valor R$) na sequência escolhida pelo usuário.
   const valorRota = new Map(rotas.map((r) => [r.rota, r.valor]));
   const maxCelula = Math.max(1, ...rotas.map((r) => r.valor));
-  // Heatmap sequencial: uma única hue (vermelho institucional), claro → escuro.
-  const heat = (v: number): CSSProperties | undefined => {
-    if (v <= 0) return undefined;
-    const t = v / maxCelula;
-    return {
-      backgroundColor: `rgba(237,10,46,${(0.06 + 0.5 * t).toFixed(3)})`,
-      color: t > 0.62 ? "#ffffff" : undefined,
-      fontWeight: t > 0.35 ? 600 : undefined,
-    };
-  };
+  // Calor em azul (série 1), de 8% a 72% de mistura. O valor está sempre escrito.
+  const calor = (v: number) => 8 + 64 * (v / maxCelula);
   const totalPorOrigem = (o: number) => rotas.filter((r) => r.cdOrigem === o).reduce((a, r) => a + r.valor, 0);
   const totalPorDestino = (d: number) => rotas.filter((r) => r.cdDestino === d).reduce((a, r) => a + r.valor, 0);
   const temCapacidade =
     origens.some((o) => o.capacidadeLimite > 0) ||
     destinos.some((d) => d.capacidadeLimite > 0) ||
     rotas.some((r) => r.capacidadeLimite > 0);
-  const unidadeCap = { unidades: "un", caixas: "cx", paletes: "pallets", peso: "kg", volume: "m³", valor: "R$" }[
+  const unidadeCap = { unidades: "un", caixas: "cx", paletes: "pal", peso: "kg", volume: "m³", valor: "R$" }[
     data.capacidade?.metrica ?? "unidades"
   ] ?? "un";
-  const topRotas = [...rotas].sort((a, b) => b.valor - a.valor).slice(0, 8);
-  const maxRota = Math.max(1, ...topRotas.map((r) => r.valor));
+  const rotasOrdenadas = [...rotas].sort((a, b) => b.valor - a.valor);
+  const maxRota = Math.max(1, ...rotasOrdenadas.map((r) => r.valor));
+  const gargalo = data.capacidade?.gargalos?.[0];
+  // "a expedição do CD 10" · "o recebimento do CD 1" · "o transporte CD 10 → CD 8"
+  const nomeGargalo = gargalo ? (gargalo.tipo === "rota" ? `transporte ${rotuloRota(gargalo.id)}` : `${gargalo.tipo === "origem" ? "expedição" : "recebimento"} do ${gargalo.id}`) : "";
+  const artigo = gargalo?.tipo === "origem" ? "a" : "o";
+  const linhasCap = [
+    ...origens.filter((o) => o.capacidadeLimite > 0 || o.bloqueadoPorCapacidade > 0).map((o) => ({ chave: `o${o.cd}`, nome: <Cd n={o.cd} />, papel: "Expedição", ...o })),
+    ...destinos.filter((d) => d.capacidadeLimite > 0 || d.bloqueadoPorCapacidade > 0).map((d) => ({ chave: `d${d.cd}`, nome: <Cd n={d.cd} />, papel: "Recebimento", ...d })),
+    ...rotas.filter((r) => r.capacidadeLimite > 0 || r.bloqueadoPorCapacidade > 0).map((r) => ({ chave: `r${r.rota}`, nome: <Rota origem={r.cdOrigem} destino={r.cdDestino} />, papel: "Transporte", ...r })),
+  ];
+  const destinosAjustados = destinos.filter((d) => Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1).length;
+  const emAberto = Math.max(0, kpis.necessidadeTotalRs - kpis.valorTransfTotal);
+  const dataBase = data.analise.criadoEm ? new Date(data.analise.criadoEm).toLocaleDateString("pt-BR") : "";
 
   return (
-    <div>
+    <>
       <PageHeader
-        title="Dashboard executivo"
+        title={<>{fmtRsCompacto(kpis.valorTransfTotal)} cobrem {fmtPct(kpis.coberturaNecessidade, 0)} da necessidade da rede</>}
         subtitle={
           <>
-            Análise <b>{data.analise.id}</b> · {modoPedidos ? "consumindo pedidos futuros" : "atendendo o saldo ideal"} ·{" "}
-            {data.sequenciaOrigens.length} origem(ns) → {data.sequenciaDestinos.length} destino(s) · {data.tempoMs} ms
+            Análise {data.analise.id} · {modoPedidos ? "consumindo pedidos futuros" : "atendendo o saldo ideal"} ·{" "}
+            {data.sequenciaOrigens.length} origem(ns) → {data.sequenciaDestinos.length} destino(s) · valores em R$
           </>
         }
         right={
-          <div className="flex items-center gap-2">
+          <>
             <Revalidando ativo={painel.revalidando} />
-            <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
-              <button onClick={() => setCobertura("total")} className={`rounded-md px-3 py-1.5 ${cobertura === "total" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Total</button>
-              <button onClick={() => setCobertura("acima_limite")} className={`rounded-md px-3 py-1.5 ${cobertura === "acima_limite" ? "bg-brand-600 text-white" : "text-slate-600"}`}>Estoque parado</button>
-            </div>
-            <Link href="/analise" className="btn-ghost">Nova análise</Link>
-          </div>
+            <Seg
+              label="Cobertura na origem"
+              valor={cobertura}
+              onChange={setCobertura}
+              opcoes={[{ valor: "total", rotulo: "Total" }, { valor: "acima_limite", rotulo: "Estoque parado" }]}
+            />
+            <Link href="/analise" className="pgm-botao pgm-botao--secundario">Nova análise</Link>
+            {data.planoDisponivel !== false && <Link href="/plano" className="pgm-botao">Abrir o plano</Link>}
+          </>
         }
       />
 
-      {painel.erro && (
-        <div className="mb-4">
-          <Alert tom="erro">
-            Falha ao atualizar o painel ({painel.erro}) — os números abaixo são da última carga bem-sucedida.{" "}
-            <button onClick={painel.recarregar} className="underline">Tentar de novo</button>
-          </Alert>
-        </div>
-      )}
-
-      <div className="mb-4 flex flex-wrap gap-1.5">
-        <Badge tom="azul">Origens: {data.sequenciaOrigens.map((c) => `CD${c}`).join(" → ")}</Badge>
-        <Badge tom="brand">Destinos: {data.sequenciaDestinos.map((c) => `CD${c}`).join(" → ")}</Badge>
-        {modoPedidos && <Badge tom="warn">Meses: {meses.map(rotuloMes).join(" · ")}</Badge>}
-        {data.consideraAprovadas && <Badge tom="good">Descontando sugestões aprovadas em aberto</Badge>}
-        {data.regras?.coberturaMaxDestinoDias > 0 && <Badge>Teto {data.regras.coberturaMaxDestinoDias}d de cobertura</Badge>}
-        {data.regras?.coberturaMinDestinoDias > 0 && <Badge>Piso {data.regras.coberturaMinDestinoDias}d</Badge>}
-        {data.regras?.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura entre destinos</Badge>}
-        {data.regras && !data.regras.considerarPendenteOrigem && <Badge tom="azul">Excesso físico (sem pendente)</Badge>}
-        {data.regras?.arredondarCaixaFechada && <Badge>Só caixa fechada</Badge>}
-        {data.regras?.semRestricoes && <Badge tom="good">Sem restrições operacionais</Badge>}
+      <div className="parametros" aria-label="Parâmetros desta análise">
+        <span className="rot">Parâmetros</span>
+        <Badge tom="azul">Origens: {data.sequenciaOrigens.map((c) => `CD ${c}`).join(" → ")}</Badge>
+        <Badge tom="azul">Destinos: {data.sequenciaDestinos.map((c) => `CD ${c}`).join(" → ")}</Badge>
+        <Badge>{modoPedidos ? `Pedidos · ${meses.map(rotuloMes).join(", ")}` : "Saldo ideal"}</Badge>
+        {data.consideraAprovadas && <Badge>Desconta a carteira aprovada</Badge>}
+        {(data.regras?.coberturaMaxDestinoDias > 0 || data.regras?.coberturaMinDestinoDias > 0) && (
+          <Badge>
+            {[data.regras.coberturaMaxDestinoDias > 0 && `Teto ${data.regras.coberturaMaxDestinoDias} d`, data.regras.coberturaMinDestinoDias > 0 && `Piso ${data.regras.coberturaMinDestinoDias} d`].filter(Boolean).join(" · ")}
+          </Badge>
+        )}
+        {data.regras?.estrategiaDestino === "nivelar_cobertura" && <Badge>Nivelando cobertura</Badge>}
+        {data.regras && !data.regras.considerarPendenteOrigem && <Badge>Excesso físico</Badge>}
+        {data.regras?.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
+        {temCapacidade && <Badge>Capacidade em {unidadeCap}</Badge>}
+        {data.regras?.semRestricoes && <Badge tom="good">Sem restrições</Badge>}
       </div>
 
-      {data.somenteResultado && (
-        <div className="mb-4">
-          <Alert tom="info">
-            Mostrando o <b>resultado salvo</b> desta análise — KPIs e resumos por rota, origem e destino.{" "}
-            {data.planoDisponivel ? (
-              <>O detalhe por SKU está guardado: abra o <Link href="/plano" className="underline">Plano</Link> para filtrar, exportar e aprovar.</>
-            ) : (
-              <>O detalhe por SKU não está disponível aqui — o <Link href="/plano" className="underline">Plano</Link> oferece recalculá-lo.</>
-            )}
-          </Alert>
+      {(painel.erro || data.somenteResultado || (data.aprovado && data.aprovado.linhas > 0) || kpis.rotasSemAliquota.length > 0) && (
+        <div className="flex flex-col gap-3">
+          {painel.erro && (
+            <Alert tom="erro" titulo="Falha ao atualizar" acao={<button onClick={painel.recarregar} className="pgm-botao pgm-botao--secundario" type="button">Tentar de novo</button>}>
+              {painel.erro}. Os números abaixo são da última carga bem-sucedida.
+            </Alert>
+          )}
+          {data.somenteResultado && (
+            <Alert tom="info" titulo="Resultado salvo" acao={<Link href="/plano" className="pgm-botao pgm-botao--secundario">Abrir o plano</Link>}>
+              KPIs e resumos por rota, origem e destino desta análise.{" "}
+              {data.planoDisponivel ? "O detalhe por SKU está guardado: no Plano você filtra, exporta e aprova." : "O detalhe por SKU não está aqui; o Plano oferece recalculá-lo."}
+            </Alert>
+          )}
+          {data.aprovado && data.aprovado.linhas > 0 && (
+            <Alert tom="good" titulo="Carteira" acao={<Link href="/carteira" className="pgm-botao pgm-botao--secundario">Ver carteira</Link>}>
+              Desta análise já saíram <b>{fmtInt(data.aprovado.linhas)} linhas</b> para a carteira: {fmtInt(data.aprovado.qtd)} un, {fmtRsCompacto(data.aprovado.valor)}. Elas seguem descontando origem e destino até o faturamento ser importado.
+            </Alert>
+          )}
+          {kpis.rotasSemAliquota.length > 0 && (
+            <Alert tom="warn" titulo={`${kpis.rotasSemAliquota.length} rota(s) sem alíquota`} acao={<Link href="/analise#p5" className="pgm-botao pgm-botao--secundario">Informar alíquota</Link>}>
+              <b>{kpis.rotasSemAliquota.map(rotuloRota).join(" · ")}</b> entram com 0% no impacto fiscal, que fica subestimado.
+            </Alert>
+          )}
         </div>
       )}
 
-      {data.aprovado && data.aprovado.linhas > 0 && (
-        <div className="mb-4">
-          <Alert tom="good">
-            Desta análise já saíram <b>{fmtInt(data.aprovado.linhas)} linhas</b> para a carteira —{" "}
-            {fmtInt(data.aprovado.qtd)} un, {fmtRsCompacto(data.aprovado.valor)}. Elas seguem descontando origem e
-            destino até o faturamento ser importado.
-          </Alert>
-        </div>
-      )}
+      <Kpis label="Indicadores da análise">
+        <Kpi titulo="Excesso nas origens" valor={fmtRsCompacto(kpis.excessoDisponivelRs)} sub={`${fmtPct(kpis.usoDoExcesso, 0)} aproveitado no plano`} />
+        <Kpi titulo="Transferências planejadas" valor={fmtRsCompacto(kpis.valorTransfTotal)} sub={`${fmtInt(kpis.qtdTransfTotal)} un · ${fmtInt(kpis.linhasPlano)} linhas · ${fmtInt(kpis.skusDistintos)} SKUs`} />
+        <Kpi titulo="Necessidade coberta" valor={fmtPct(kpis.coberturaNecessidade, 1)} sub={`de ${fmtRsCompacto(kpis.necessidadeTotalRs)} demandados · ${fmtRsCompacto(emAberto)} em aberto`} />
+        <Kpi
+          titulo="Impacto fiscal (ICMS)"
+          valor={fmtRsCompacto(kpis.impactoFiscalTotal)}
+          sub={`Saída imediata: ${fmtRsCompacto(kpis.valorImediata)}`}
+          tom={kpis.rotasSemAliquota.length > 0 ? "warn" : "default"}
+          badge={kpis.rotasSemAliquota.length > 0 ? `${kpis.rotasSemAliquota.length} rota(s) sem alíquota` : undefined}
+        />
+      </Kpis>
 
-      {kpis.rotasSemAliquota.length > 0 && (
-        <div className="mb-4">
-          <Alert tom="warn">
-            Rotas com transferência e sem alíquota definida: <b>{kpis.rotasSemAliquota.map(rotuloRota).join(" · ")}</b>. O impacto fiscal
-            está subestimado — informe as alíquotas em <Link href="/analise" className="underline">Nova análise</Link>.
-          </Alert>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi titulo="Excesso disponível nas origens" valor={fmtRsCompacto(kpis.excessoDisponivelRs)} sub={`${fmtPct(kpis.usoDoExcesso)} aproveitado no plano`} tom="azul" />
-        <Kpi titulo="Transferências planejadas" valor={fmtRsCompacto(kpis.valorTransfTotal)} sub={`${fmtInt(kpis.qtdTransfTotal)} un · ${fmtInt(kpis.linhasPlano)} linhas · ${fmtInt(kpis.skusDistintos)} SKUs`} tom="brand" />
-        <Kpi titulo="Necessidade coberta" valor={fmtPct(kpis.coberturaNecessidade)} sub={`de ${fmtRsCompacto(kpis.necessidadeTotalRs)} demandados`} tom="good" />
-        <Kpi titulo="Impacto fiscal (ICMS)" valor={fmtRsCompacto(kpis.impactoFiscalTotal)} sub={`Imediata: ${fmtRsCompacto(kpis.valorImediata)}`} tom="warn" />
+      <div className="flex flex-col gap-3">
+        {gargalo ? (
+          <>
+            <Insight>
+              {artigo === "a" ? "A" : "O"} <b>{nomeGargalo}</b> é o gargalo da rede: <b>{fmtInt(gargalo.bloqueado)} un</b> barradas
+              {data.capacidade.valorBloqueado > 0 && <> ({fmtRsCompacto(data.capacidade.valorBloqueado)} no total)</>}. Ampliar esse ponto libera mais volume do que mudar a ordem dos destinos.
+            </Insight>
+            <Decisao>Ampliar {artigo} {nomeGargalo} ou aceitar que {fmtRsCompacto(data.capacidade.valorBloqueado)} sigam em aberto para a próxima análise.</Decisao>
+          </>
+        ) : (
+          <Insight>
+            O plano cobre <b>{fmtPct(kpis.coberturaNecessidade, 0)}</b> da necessidade com <b>{fmtPct(kpis.usoDoExcesso, 0)}</b> do excesso das origens.{" "}
+            {emAberto > 0 ? <>Ficam <b>{fmtRsCompacto(emAberto)}</b> em aberto para a próxima análise.</> : "Nenhuma necessidade ficou em aberto."}
+          </Insight>
+        )}
       </div>
 
       {/* ------------------------- Matriz origem × destino ------------------------- */}
-      <div className="mt-4">
-        <Secao titulo="Matriz origem → destino" desc="Valor transferido em cada rota, na sequência que você escolheu.">
-          <div className="overflow-x-auto thin-scroll">
-            <table className="min-w-full border-separate" style={{ borderSpacing: "2px" }}>
-              <thead>
-                <tr>
-                  <th className="math text-left">Origem \ Destino</th>
-                  {data.sequenciaDestinos.map((d, i) => (
-                    <th key={d} className="matgh">
-                      <div className="text-slate-600">CD {d}</div>
-                      <div className="text-[10px] font-normal text-slate-400">prioridade {i + 1}</div>
-                    </th>
-                  ))}
-                  <th className="matgh text-right">Total origem</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.sequenciaOrigens.map((o, i) => (
-                  <tr key={o}>
-                    <td className="math">
-                      <div className="text-slate-700">CD {o}</div>
-                      <div className="text-[10px] font-normal text-slate-400">ordem {i + 1}</div>
-                    </td>
-                    {data.sequenciaDestinos.map((d) => {
-                      const v = o === d ? -1 : valorRota.get(`${o}>${d}`) ?? 0;
-                      return (
-                        <td key={d} className="matd rounded-md text-right tabular-nums" style={v > 0 ? heat(v) : undefined} title={o === d ? "mesma unidade" : `CD${o} → CD${d}: ${fmtRs(v)}`}>
-                          {o === d ? <span className="text-slate-300">—</span> : v > 0 ? fmtRsCompacto(v) : <span className="text-slate-300">0</span>}
-                        </td>
-                      );
-                    })}
-                    <td className="matd text-right font-semibold tabular-nums">{fmtRsCompacto(totalPorOrigem(o))}</td>
-                  </tr>
+      <Secao titulo="Matriz origem → destino" desc="Valor transferido em cada rota, na sequência escolhida · R$">
+        <Rolagem>
+          <table className="mx">
+            <caption className="sr-only">Valor transferido por origem e destino, em reais.</caption>
+            <thead>
+              <tr>
+                <th scope="col">Origem \ destino</th>
+                {data.sequenciaDestinos.map((d, i) => (
+                  <th key={d} scope="col">CD {d}<small>{i + 1}º destino</small></th>
                 ))}
-                <tr>
-                  <td className="math">Total destino</td>
-                  {data.sequenciaDestinos.map((d) => (
-                    <td key={d} className="matd text-right font-semibold tabular-nums">{fmtRsCompacto(totalPorDestino(d))}</td>
-                  ))}
-                  <td className="matd text-right font-bold tabular-nums text-brand-700">{fmtRsCompacto(kpis.valorTransfTotal)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Secao>
-      </div>
-
-      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
-        {/* --------------------------- Origens --------------------------- */}
-        <Secao titulo="Origens — quanto do excesso escoou" desc="Na ordem de análise. O que sobra continua parado no CD.">
-          <div className="overflow-x-auto thin-scroll">
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="th">#</th><th className="th">CD</th>
-                <th className="th text-right">Excesso</th><th className="th text-right">Transferido</th>
-                <th className="th w-32">Aproveitamento</th>
+                <th scope="col">Total<small>saída da origem</small></th>
               </tr>
             </thead>
             <tbody>
-              {origens.map((o) => {
-                const uso = o.excessoRs > 0 ? o.transferidoRs / o.excessoRs : 0;
-                return (
-                  <tr key={o.cd} className="border-b border-slate-100">
-                    <td className="td text-slate-400">{o.ordem}</td>
-                    <td className="td font-semibold">CD {o.cd}</td>
-                    <td className="td num">{fmtRsCompacto(o.excessoRs)}</td>
-                    <td className="td num">{fmtRsCompacto(o.transferidoRs)}</td>
-                    <td className="td">
-                      <div className="flex items-center gap-2">
-                        <Barra pct={uso} tom="azul" />
-                        <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{fmtPct(uso, 0)}</span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        </Secao>
-
-        {/* -------------------------- Destinos --------------------------- */}
-        <Secao titulo="Destinos — quanto da necessidade foi coberto" desc="Na ordem de prioridade. O aberto segue para a próxima análise.">
-          <div className="overflow-x-auto thin-scroll">
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="th">#</th><th className="th">CD</th>
-                <th className="th text-right">Necessidade</th><th className="th text-right">Atendido</th>
-                <th className="th w-32">Cobertura</th>
-              </tr>
-            </thead>
-            <tbody>
-              {destinos.map((d) => (
-                <tr key={d.cd} className="border-b border-slate-100">
-                  <td className="td text-slate-400">{d.ordem}</td>
-                  <td className="td font-semibold">CD {d.cd}</td>
-                  <td className="td num">
-                    {fmtRsCompacto(d.necessidadeRs)}
-                    {Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1 && (
-                      <div className="text-[10px] text-slate-400" title="demanda crua antes do teto/piso de cobertura">
-                        bruta {fmtInt(d.necessidadeBrutaQtd)} un → {fmtInt(d.necessidadeQtd)} un
-                      </div>
-                    )}
-                  </td>
-                  <td className="td num">{fmtRsCompacto(d.atendidoRs)}</td>
-                  <td className="td">
-                    <div className="flex items-center gap-2">
-                      <Barra pct={d.cobertura} tom={d.cobertura >= 0.999 ? "good" : "brand"} />
-                      <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{fmtPct(d.cobertura, 0)}</span>
-                    </div>
-                  </td>
+              {data.sequenciaOrigens.map((o, i) => (
+                <tr key={o}>
+                  <th scope="row">CD {o}<small style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--ink-3)" }}>{i + 1}ª origem</small></th>
+                  {data.sequenciaDestinos.map((d) => {
+                    if (o === d) return <td key={d} className="mx-vazio">mesmo CD</td>;
+                    const v = valorRota.get(`${o}>${d}`) ?? 0;
+                    if (v <= 0) return <td key={d} className="mx-vazio">sem rota</td>;
+                    const n = calor(v);
+                    return (
+                      <td key={d} style={{ ["--n" as string]: n }} data-forte={n > 55 ? "true" : undefined} title={`CD ${o} → CD ${d}: ${fmtRs(v)}`}>
+                        {fmtRsCompacto(v)}
+                      </td>
+                    );
+                  })}
+                  <td className="mx-total">{fmtRsCompacto(totalPorOrigem(o))}</td>
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <th scope="row">Total recebido</th>
+                {data.sequenciaDestinos.map((d) => <td key={d}>{fmtRsCompacto(totalPorDestino(d))}</td>)}
+                <td>{fmtRsCompacto(kpis.valorTransfTotal)}</td>
+              </tr>
+            </tfoot>
           </table>
-          </div>
+        </Rolagem>
+        <div className="mx-leg">
+          Menos <i style={{ ["--n" as string]: 10 }} /><i style={{ ["--n" as string]: 25 }} /><i style={{ ["--n" as string]: 40 }} /><i style={{ ["--n" as string]: 55 }} /><i style={{ ["--n" as string]: 70 }} /> mais
+          <span>·</span>O valor está escrito em cada célula; a cor só ajuda a achar as maiores rotas.
+        </div>
+      </Secao>
+
+      <div className="app-grade">
+        {/* --------------------------- Origens --------------------------- */}
+        <Secao flush titulo="Origens: quanto do excesso escoou" desc="Na ordem de análise · o que sobra continua parado no CD">
+          <Rolagem>
+            <table className="pgm-tabela">
+              <thead>
+                <tr><th>Origem</th><th className="pgm-num">Excesso</th><th className="pgm-num">Transferido</th><th>Aproveitado</th><th className="pgm-num">Fica parado</th></tr>
+              </thead>
+              <tbody>
+                {origens.map((o) => (
+                  <tr key={o.cd}>
+                    <td><Cd n={o.cd} ordem={`${o.ordem}ª`} /></td>
+                    <td className="pgm-num">{fmtRsCompacto(o.excessoRs)}</td>
+                    <td className="pgm-num">{fmtRsCompacto(o.transferidoRs)}</td>
+                    <td><Barra pct={o.excessoRs > 0 ? o.transferidoRs / o.excessoRs : 0} /></td>
+                    <td className="pgm-num">{fmtRsCompacto(o.sobraRs)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>Rede</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.excessoDisponivelRs)}</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.valorTransfTotal)}</td>
+                  <td><Barra pct={kpis.usoDoExcesso} /></td>
+                  <td className="pgm-num">{fmtRsCompacto(Math.max(0, kpis.excessoDisponivelRs - kpis.valorTransfTotal))}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </Rolagem>
+        </Secao>
+
+        {/* -------------------------- Destinos --------------------------- */}
+        <Secao flush titulo="Destinos: quanto da necessidade foi coberto" desc="Na ordem de prioridade · bruta → considerada após teto e piso · o aberto segue para a próxima análise">
+          <Rolagem>
+            <table className="pgm-tabela">
+              <thead>
+                <tr><th>Destino</th><th className="pgm-num">Necessidade</th><th className="pgm-num">Coberto</th><th>Cobertura</th><th className="pgm-num">Em aberto</th></tr>
+              </thead>
+              <tbody>
+                {destinos.map((d) => {
+                  const ajustada = Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1;
+                  return (
+                    <tr key={d.cd}>
+                      <td><Cd n={d.cd} ordem={`${d.ordem}º`} /></td>
+                      <td className="pgm-num">
+                        {ajustada ? (
+                          <span className="de-para" title="Demanda bruta antes do teto e piso de cobertura → considerada">
+                            <s>{fmtInt(d.necessidadeBrutaQtd)} un</s> → <b>{fmtInt(d.necessidadeQtd)} un</b>
+                          </span>
+                        ) : (
+                          fmtRsCompacto(d.necessidadeRs)
+                        )}
+                        {ajustada && <span className="sub">{fmtRsCompacto(d.necessidadeRs)}</span>}
+                      </td>
+                      <td className="pgm-num">{fmtRsCompacto(d.atendidoRs)}</td>
+                      <td><Barra pct={d.cobertura} tom={d.cobertura >= 0.999 ? "good" : "brand"} /></td>
+                      <td className="pgm-num">{fmtRsCompacto(Math.max(0, d.necessidadeRs - d.atendidoRs))}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>Rede</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.necessidadeTotalRs)}</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.valorTransfTotal)}</td>
+                  <td><Barra pct={kpis.coberturaNecessidade} /></td>
+                  <td className="pgm-num">{fmtRsCompacto(emAberto)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </Rolagem>
         </Secao>
       </div>
 
       {/* ----------------------- Capacidade operacional ------------------- */}
       {(temCapacidade || data.capacidade?.qtdBloqueada > 0) && (
-        <div className="mt-4">
-          <Secao
-            titulo="Capacidade operacional"
-            desc={`Limites de expedição, recebimento e transporte em ${unidadeCap}. Sugestões aprovadas e não faturadas já ocupam capacidade.`}
-            right={
-              data.capacidade?.qtdBloqueada > 0 ? (
-                <Badge tom="warn">
-                  {fmtInt(data.capacidade.qtdBloqueada)} un barradas · {fmtRsCompacto(data.capacidade.valorBloqueado)}
-                </Badge>
-              ) : (
-                <Badge tom="good">Nenhuma transferência barrada</Badge>
-              )
-            }
-          >
-            {data.capacidade?.gargalos?.length > 0 && (
-              <div className="mb-3">
-                <Alert tom="warn">
-                  Gargalo da rede:{" "}
+        <Secao
+          flush
+          titulo="Capacidade operacional"
+          desc={`Cada alocação consome expedição, recebimento e transporte ao mesmo tempo · métrica: ${unidadeCap} · sugestões aprovadas e não faturadas já ocupam capacidade`}
+        >
+          {(gargalo || data.capacidade?.skusSemFator > 0) && (
+            <div className="flex flex-col gap-3" style={{ padding: "0 24px 16px" }}>
+              {gargalo && (
+                <Alert tom="erro" titulo="Gargalo da rede">
                   {data.capacidade.gargalos.slice(0, 3).map((g, i) => (
                     <span key={g.tipo + g.id}>
                       {i > 0 && " · "}
                       <b>{g.tipo === "rota" ? rotuloRota(g.id) : g.id}</b> ({g.tipo}) barrou {fmtInt(g.bloqueado)} un
                     </span>
                   ))}
-                  . Ampliar esse ponto libera mais transferência do que mexer na ordem dos destinos.
+                  . É onde ampliar capacidade libera mais transferência.
                 </Alert>
-              </div>
-            )}
-            {data.capacidade?.skusSemFator > 0 && (
-              <div className="mb-3">
-                <Alert tom="info">
-                  {fmtInt(data.capacidade.skusSemFator)} SKU(s) sem o dado de <b>{data.capacidade.metrica}</b> na base —
-                  eles não consomem capacidade, então a utilização abaixo está subestimada.
+              )}
+              {data.capacidade?.skusSemFator > 0 && (
+                <Alert tom="info" titulo={`${fmtInt(data.capacidade.skusSemFator)} SKU(s) sem fator`}>
+                  Sem o dado de <b>{data.capacidade.metrica}</b> na base, eles não consomem capacidade: a utilização abaixo está subestimada.
                 </Alert>
-              </div>
-            )}
-            <div className="overflow-x-auto thin-scroll">
-              <table className="min-w-full">
-                <thead>
-                  <tr className="border-b border-slate-200">
-                    <th className="th">Ponto</th>
-                    <th className="th">Papel</th>
-                    <th className="th text-right">Limite</th>
-                    <th className="th text-right">Comprometido</th>
-                    <th className="th text-right">Usado</th>
-                    <th className="th w-32">Utilização</th>
-                    <th className="th text-right">Barrado (un)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    ...origens.filter((o) => o.capacidadeLimite > 0 || o.bloqueadoPorCapacidade > 0).map((o) => ({
-                      chave: `o${o.cd}`, nome: `CD ${o.cd}`, papel: "Expedição", ...o,
-                    })),
-                    ...destinos.filter((d) => d.capacidadeLimite > 0 || d.bloqueadoPorCapacidade > 0).map((d) => ({
-                      chave: `d${d.cd}`, nome: `CD ${d.cd}`, papel: "Recebimento", ...d,
-                    })),
-                    ...rotas.filter((r) => r.capacidadeLimite > 0 || r.bloqueadoPorCapacidade > 0).map((r) => ({
-                      chave: `r${r.rota}`, nome: rotuloRota(r.rota), papel: "Transporte", ...r,
-                    })),
-                  ].map((x) => {
-                    const uso = x.capacidadeLimite > 0 ? x.capacidadeUsada / x.capacidadeLimite : 0;
-                    return (
-                      <tr key={x.chave} className="border-b border-slate-100">
-                        <td className="td font-semibold">{x.nome}</td>
-                        <td className="td text-slate-500">{x.papel}</td>
-                        <td className="td num">{x.capacidadeLimite > 0 ? fmtCap(x.capacidadeLimite) : "—"}</td>
-                        <td className="td num text-slate-500">{fmtCap(x.capacidadeComprometida)}</td>
-                        <td className="td num">{fmtCap(x.capacidadeUsada)}</td>
-                        <td className="td">
-                          {x.capacidadeLimite > 0 ? (
-                            <div className="flex items-center gap-2">
-                              <Barra pct={uso} tom={uso >= 0.999 ? "brand" : "azul"} />
-                              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{fmtPct(uso, 0)}</span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-slate-400">sem limite</span>
-                          )}
-                        </td>
-                        <td className={`td num ${x.bloqueadoPorCapacidade > 0 ? "text-amber-600" : "text-slate-400"}`}>
-                          {fmtInt(x.bloqueadoPorCapacidade)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              )}
             </div>
-          </Secao>
-        </div>
-      )}
-
-      {/* --------------------------- Top rotas --------------------------- */}
-      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
-        <Secao titulo="Maiores rotas" desc="Valor transferido por rota (top 8).">
-          <div className="flex flex-col gap-2">
-            {topRotas.map((r) => (
-              <div key={r.rota} className="flex items-center gap-3" title={`${fmtRs(r.valor)} · ${fmtInt(r.qtd)} un · ${fmtInt(r.linhas)} SKUs`}>
-                <div className="w-20 shrink-0 text-xs font-medium text-slate-600 sm:w-24">CD{r.cdOrigem} → CD{r.cdDestino}</div>
-                <div className="h-3 min-w-0 flex-1 overflow-hidden rounded-sm bg-slate-100">
-                  <div className="h-full rounded-r-[4px] bg-brand-500" style={{ width: `${(r.valor / maxRota) * 100}%` }} />
-                </div>
-                <div className="w-16 shrink-0 text-right text-xs tabular-nums text-slate-600 sm:w-20">{fmtRsCompacto(r.valor)}</div>
-              </div>
-            ))}
-            {topRotas.length === 0 && <p className="text-sm text-slate-400">Nenhuma transferência sugerida com os filtros atuais.</p>}
-          </div>
-        </Secao>
-
-        <Secao titulo="Detalhe por rota" desc={modoPedidos ? "Quebra mensal do que cada rota abate de pedidos." : "Volume, imediata e impacto fiscal por rota."}>
-          <div className="overflow-x-auto thin-scroll">
-            <table className="min-w-full">
+          )}
+          <Rolagem>
+            <table className="pgm-tabela">
               <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="thc">Rota</th>
-                  {modoPedidos && meses.map((m) => <th key={m} className="thc text-right">{rotuloMes(m)}</th>)}
-                  <th className="thc text-right">Total</th>
-                  <th className="thc text-right">Imediata</th>
-                  <th className="thc text-right">Alíq.</th>
-                  <th className="thc text-right">Fiscal</th>
-                </tr>
+                <tr><th>Ponto</th><th>Papel</th><th className="pgm-num">Limite</th><th className="pgm-num">Comprometido</th><th className="pgm-num">Usado</th><th>Utilização</th><th className="pgm-num">Barrado (un)</th></tr>
               </thead>
               <tbody>
-                {rotas.map((r) => (
-                  <tr key={r.rota} className="border-b border-slate-100">
-                    <td className="tdc font-medium">CD{r.cdOrigem} → CD{r.cdDestino}</td>
-                    {modoPedidos && r.valorMes.map((v, i) => <td key={i} className="tdc num">{fmtRsCompacto(v)}</td>)}
-                    <td className="tdc num font-semibold">{fmtRsCompacto(r.valor)}</td>
-                    <td className="tdc num">{fmtRsCompacto(r.valorImediata)}</td>
-                    <td className="tdc num">{r.aliquotaDefinida ? fmtPct(r.aliquota) : <span className="text-amber-600">—</span>}</td>
-                    <td className="tdc num">{fmtRsCompacto(r.impactoFiscal)}</td>
+                {linhasCap.map((x) => {
+                  const eGargalo = x.bloqueadoPorCapacidade > 0;
+                  return (
+                    <tr key={x.chave} className={eGargalo ? "gargalo" : undefined}>
+                      <td>{x.nome}{eGargalo && <span className="pgm-status pgm-status--atrasado" style={{ marginLeft: 8 }}>Gargalo</span>}</td>
+                      <td>{x.papel}</td>
+                      <td className="pgm-num">{x.capacidadeLimite > 0 ? fmtCap(x.capacidadeLimite) : "sem limite"}</td>
+                      <td className="pgm-num">{fmtCap(x.capacidadeComprometida)}</td>
+                      <td className="pgm-num">{fmtCap(x.capacidadeUsada)}</td>
+                      <td><Utilizacao limite={x.capacidadeLimite} comprometido={x.capacidadeComprometida} usado={x.capacidadeUsada} /></td>
+                      <td className="pgm-num">{eGargalo ? <b>{fmtInt(x.bloqueadoPorCapacidade)}</b> : "0"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Rolagem>
+          <div style={{ padding: "0 24px 20px" }}>
+            <div className="util-leg">
+              <span><i style={{ background: "var(--cinza-serie)", opacity: 0.55 }} />Comprometido pela carteira aprovada</span>
+              <span><i style={{ background: "var(--serie-1)" }} />Usado nesta análise</span>
+              <span><i style={{ background: "var(--coral)" }} />No limite</span>
+            </div>
+          </div>
+        </Secao>
+      )}
+
+      {/* --------------------------- Rotas --------------------------- */}
+      <Secao
+        flush
+        titulo="Rotas, da maior para a menor"
+        desc={modoPedidos ? "Quebra mensal do que cada rota abate de pedidos · a barra mostra o valor transferido" : "Volume, saída imediata e impacto fiscal por rota · a barra mostra o valor transferido"}
+        right={<Link href="/plano" className="app-card__lado">Abrir no plano →</Link>}
+      >
+        <Rolagem>
+          <table className="pgm-tabela">
+            <thead>
+              <tr>
+                <th>Rota</th>
+                <th className="pgm-num">SKUs</th>
+                <th className="pgm-num">Unidades</th>
+                {modoPedidos && meses.map((m) => <th key={m} className="pgm-num">{rotuloMes(m)}</th>)}
+                <th className="pgm-num">Valor</th>
+                <th className="pgm-num">Imediata</th>
+                <th className="pgm-num">ICMS</th>
+                <th className="pgm-num">Alíquota</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rotasOrdenadas.map((r) => (
+                <tr key={r.rota}>
+                  <td><Rota origem={r.cdOrigem} destino={r.cdDestino} /></td>
+                  <td className="pgm-num">{fmtInt(r.linhas)}</td>
+                  <td className="pgm-num">{fmtInt(r.qtd)}</td>
+                  {modoPedidos && r.valorMes.map((v, i) => <td key={i} className="pgm-num">{fmtRsCompacto(v)}</td>)}
+                  <td className="pgm-barra pgm-num">
+                    <span className="pgm-barra__fundo" style={{ width: `${(r.valor / maxRota) * 100}%` }} />
+                    <span className="pgm-barra__valor">{fmtRsCompacto(r.valor)}</span>
+                  </td>
+                  <td className="pgm-num">{fmtRsCompacto(r.valorImediata)}</td>
+                  <td className="pgm-num">{fmtRsCompacto(r.impactoFiscal)}</td>
+                  <td className="pgm-num">{r.aliquotaDefinida ? fmtPct(r.aliquota, 1) : <Pill tom="ambar" pequena>sem alíquota</Pill>}</td>
+                </tr>
+              ))}
+              {rotasOrdenadas.length === 0 && (
+                <tr><td colSpan={7 + (modoPedidos ? meses.length : 0)} style={{ textAlign: "center", color: "var(--ink-2)" }}>Nenhuma transferência sugerida com os filtros atuais.</td></tr>
+              )}
+            </tbody>
+            {rotasOrdenadas.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td>{rotasOrdenadas.length} rota(s)</td>
+                  <td className="pgm-num">{fmtInt(kpis.linhasPlano)}</td>
+                  <td className="pgm-num">{fmtInt(kpis.qtdTransfTotal)}</td>
+                  {modoPedidos && meses.map((_, i) => <td key={i} className="pgm-num">{fmtRsCompacto(rotas.reduce((a, r) => a + (r.valorMes[i] ?? 0), 0))}</td>)}
+                  <td className="pgm-num">{fmtRsCompacto(kpis.valorTransfTotal)}</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.valorImediata)}</td>
+                  <td className="pgm-num">{fmtRsCompacto(kpis.impactoFiscalTotal)}</td>
+                  <td className="pgm-num"></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </Rolagem>
+      </Secao>
+
+      {/* --------------------------- Histórico --------------------------- */}
+      {historico.length > 0 && (
+        <Secao flush titulo="Histórico de análises" desc="O resultado de cada rodada fica guardado: parâmetros, KPIs e o que foi aprovado">
+          <Rolagem>
+            <table className="pgm-tabela">
+              <thead>
+                <tr><th>Análise</th><th>Rodada em</th><th>Demanda</th><th>Origens → destinos</th><th className="pgm-num">Transferido</th><th className="pgm-num">Cobertura</th><th className="pgm-num">Aprovado</th><th>Guardada</th></tr>
+              </thead>
+              <tbody>
+                {historico.map((h) => (
+                  <tr key={h.id} className={h.id === data.analise.id ? "sel" : undefined}>
+                    <td>
+                      <b>{h.id}</b>
+                      {h.id === data.analise.id && <Badge tom="azul"><span style={{ marginLeft: 0 }}>Esta análise</span></Badge>}
+                      {h.label && <span className="sub">{h.label}</span>}
+                    </td>
+                    <td>{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
+                    <td>{h.modoDemanda === "pedidos" ? "Pedidos" : "Saldo ideal"}</td>
+                    <td>{h.origens.join(", ")} → {h.destinos.join(", ")}</td>
+                    <td className="pgm-num">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</td>
+                    <td className="pgm-num">{fmtPct(h.kpis?.coberturaNecessidade ?? 0, 0)}</td>
+                    <td className="pgm-num">{h.aprovado && h.aprovado.linhas > 0 ? fmtRsCompacto(h.aprovado.valor) : "—"}</td>
+                    <td>{duravel ? <Badge tom="good">Persistida</Badge> : <Badge tom="warn">Só em memória</Badge>}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </Rolagem>
         </Secao>
-      </div>
-
-      {/* --------------------------- Histórico --------------------------- */}
-      {historico.length > 0 && (
-        <div className="mt-4">
-          <Secao
-            titulo="Histórico de análises"
-            desc="O resultado de cada rodada fica salvo — parâmetros, KPIs e o que foi aprovado."
-            right={<Badge tom={duravel ? "good" : "warn"}>{duravel ? "🗄 Persistido" : "⚠ Em memória"}</Badge>}
-          >
-            <div className="overflow-x-auto thin-scroll">
-              <table className="min-w-full">
-                <thead>
-                  <tr className="border-b border-slate-200">
-                    <th className="th">Quando</th>
-                    <th className="th">Análise</th>
-                    <th className="th">Rede</th>
-                    <th className="th text-right">Transferido</th>
-                    <th className="th text-right">Cobertura</th>
-                    <th className="th text-right">Fiscal</th>
-                    <th className="th text-right">Aprovado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historico.map((h) => (
-                    <tr key={h.id} className={`border-b border-slate-100 ${h.id === data.analise.id ? "bg-brand-50/40" : ""}`}>
-                      <td className="td">{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
-                      <td className="td">
-                        <span className="font-medium">{h.id}</span>
-                        <div className="text-[11px] text-slate-400">{h.label}</div>
-                      </td>
-                      <td className="td text-slate-500">
-                        {h.origens.length}→{h.destinos.length} · {h.modoDemanda === "pedidos" ? "pedidos" : "saldo ideal"}
-                      </td>
-                      <td className="td num">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</td>
-                      <td className="td num">{fmtPct(h.kpis?.coberturaNecessidade ?? 0, 0)}</td>
-                      <td className="td num text-slate-500">{fmtRsCompacto(h.kpis?.impactoFiscalTotal ?? 0)}</td>
-                      <td className="td num">
-                        {h.aprovado && h.aprovado.linhas > 0 ? (
-                          <span className="text-emerald-600">{fmtRsCompacto(h.aprovado.valor)}</span>
-                        ) : (
-                          <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Secao>
-        </div>
       )}
-    </div>
+
+      <div>
+        <Ressalvas
+          itens={[
+            destinosAjustados > 0 && `Teto e piso mudaram a necessidade de ${destinosAjustados} destino(s)`,
+            data.capacidade?.skusSemFator > 0 && `${fmtInt(data.capacidade.skusSemFator)} SKUs sem fator de ${data.capacidade.metrica} não consomem capacidade`,
+            temCapacidade && !rotas.some((r) => r.capacidadeLimite > 0) && "Transporte por rota sem limite definido",
+            kpis.rotasSemAliquota.length > 0 && `${kpis.rotasSemAliquota.map(rotuloRota).join(", ")} sem alíquota: ICMS em 0%`,
+            cobertura === "acima_limite" && "Visão filtrada: só SKUs com estoque parado na origem",
+          ]}
+        />
+        <Fonte>
+          Fonte: {data.analise.fonteBase || "base de CDs importada"}{dataBase && ` · análise rodada em ${dataBase}`} · estoque objetivo, venda média de 3 meses e pendente da própria base · cálculo em {data.tempoMs} ms.
+        </Fonte>
+      </div>
+    </>
   );
 }

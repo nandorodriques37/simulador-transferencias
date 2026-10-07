@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Nav } from "@/components/Nav";
+import { Casca } from "@/components/Nav";
+import { SCRIPT_TEMA } from "@/components/tema-script";
 
 export const metadata: Metadata = {
   title: "Pague Menos — Transferências entre CDs",
@@ -12,13 +13,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" data-theme="claro" suppressHydrationWarning>
+      <head>
+        {/* Aplica o tema salvo antes da hidratação: sem piscar claro → escuro. */}
+        <script dangerouslySetInnerHTML={{ __html: SCRIPT_TEMA }} />
+      </head>
       <body>
-        <div className="flex min-h-screen">
-          <Nav />
-          {/* pt-16 abre espaço para a barra superior fixa do celular. */}
-          <main className="flex-1 min-w-0 px-4 pb-6 pt-20 sm:px-6 md:pt-6 lg:px-8">{children}</main>
-        </div>
+        <Casca>{children}</Casca>
       </body>
     </html>
   );

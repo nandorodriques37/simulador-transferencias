@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Badge, Chave, ErroCarga, PageHeader, Progress, Secao, Spinner } from "@/components/ui";
+import { Alert, Badge, Campo, Chave, ErroCarga, Fonte, PageHeader, Progress, Rolagem, Secao, Spinner } from "@/components/ui";
+import { Icone } from "@/components/icones";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
 
@@ -109,7 +110,7 @@ export default function NovaAnalise() {
   const infoPorCd = useMemo(() => Object.fromEntries(cdsInfo.map((c) => [c.cd, c])) as Record<number, CdInfo>, [cdsInfo]);
 
   if (erroCarga && (!params || !dataset)) return <ErroCarga erro={erroCarga} onTentar={carregar} />;
-  if (!params || !dataset) return <div className="pt-10"><Spinner label="Carregando…" /></div>;
+  if (!params || !dataset) return <Spinner label="Abrindo a análise…" />;
 
   const set = (patch: Partial<Parametros>) => setParams({ ...params, ...patch });
   const cap: CapacidadeRede = params.capacidade ?? {
@@ -225,354 +226,325 @@ export default function NovaAnalise() {
     }
   };
 
+  // --- Estado de cada passo para o índice lateral ---
+  const rotasSemAliquota = rotas.filter((r) => params.aliquotas[r] === undefined);
+  const passos: { id: string; nome: string; estado: "ok" | "atencao" | "desligado" | "pendente"; status: string }[] = [
+    { id: "p1", nome: "Bases", estado: dataset.pronto ? "ok" : "atencao", status: dataset.pronto ? `Pronto · ${fmtInt(dataset.baseLinhas)} linhas` : "Importe a base de CDs" },
+    { id: "p2", nome: "Demanda", estado: modoPedidos && params.horizonteMeses.length === 0 ? "atencao" : "ok", status: modoPedidos ? (params.horizonteMeses.length ? `Pedidos · ${params.horizonteMeses.length} mês(es)` : "Escolha os meses") : "Saldo ideal" },
+    { id: "p3", nome: "Origens", estado: params.origens.length ? "ok" : "atencao", status: params.origens.length ? `Pronto · ${params.origens.length} CD(s)` : "Escolha ao menos uma" },
+    { id: "p4", nome: "Destinos", estado: params.destinos.length ? "ok" : "atencao", status: params.destinos.length ? `Pronto · ${params.destinos.length} CD(s)` : "Escolha ao menos um" },
+    { id: "p5", nome: "Parâmetros e alíquotas", estado: rotasSemAliquota.length ? "atencao" : "ok", status: rotasSemAliquota.length ? `${rotasSemAliquota.length} rota(s) sem alíquota` : "Alíquotas completas" },
+    { id: "p6", nome: "Capacidade", estado: capAtiva ? (temCapacidade ? "ok" : "pendente") : "desligado", status: capAtiva ? (temCapacidade ? `Limites ativos · ${unidadeCap}` : "Sem limites definidos") : "Desligada" },
+  ];
+  const dataBase = dataset.dataPosicao ? new Date(dataset.dataPosicao).toLocaleDateString("pt-BR") : "";
+  const titulo = !dataset.pronto
+    ? "Importe a base de CDs para começar"
+    : rotasSemAliquota.length > 0
+      ? <>Falta alíquota em <em>{rotasSemAliquota.length} rota(s)</em></>
+      : <>{dataBase ? `Base de ${dataBase} carregada` : "Base carregada"}: {dataset.cds.length} CDs e {fmtInt(dataset.baseLinhas)} linhas</>;
+  const podeRodar = dataset.pronto && params.origens.length > 0 && params.destinos.length > 0 && !rodando;
+  const nivelAchado = (n: Achado["nivel"]) => nivelTom[n];
+  const aliquotaTexto = (rota: string) => {
+    const v = params.aliquotas[rota];
+    return v === undefined ? "" : String(v).replace(".", ",");
+  };
+  const setAliquota = (rota: string, texto: string) => {
+    const novo = { ...params.aliquotas };
+    const limpo = texto.trim().replace(",", ".");
+    if (limpo === "") delete novo[rota];
+    else if (!Number.isNaN(Number(limpo))) novo[rota] = Number(limpo);
+    else return;
+    set({ aliquotas: novo });
+  };
+
+  const Rodar = ({ className = "pgm-botao" }: { className?: string }) => (
+    <button onClick={rodar} disabled={!podeRodar} className={className} type="button">
+      {rodando ? "Rodando…" : "Rodar análise"}
+    </button>
+  );
+
   return (
-    <div>
+    <>
       <PageHeader
-        title="Nova análise de transferência"
-        subtitle={
-          <>
-            Duas bases, uma análise: a <b>base de CDs</b> (origem e destino) e a <b>base de pedidos</b>.
-            Você define a <b>sequência das origens</b> e a <b>ordem dos destinos</b>.
-          </>
-        }
-        right={
-          <button onClick={rodar} disabled={rodando} className="btn-primary">
-            {rodando ? "Rodando…" : "▶ Rodar análise"}
-          </button>
-        }
+        title={titulo}
+        subtitle="Seis passos até o plano · a ordem das origens e dos destinos muda o resultado"
+        right={<Rodar />}
       />
 
-      {msg && <div className="mb-4"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
-
-      {!dataset.pronto && (
-        <div className="mb-4">
-          <Alert tom="warn">
-            <b>Sem base carregada nesta instância.</b> Importe a base de CDs abaixo para rodar a análise. O estado da
-            base vive na memória do servidor: depois de um período ocioso ou de um novo deploy, a importação precisa
-            ser refeita.
-          </Alert>
-        </div>
-      )}
-      {dataset.pronto && dataset.demo && (
-        <div className="mb-4">
-          <Alert tom="info">
-            Você está vendo a <b>base de demonstração</b> (dados sintéticos). Importe as suas planilhas para trabalhar
-            com dados reais.
-          </Alert>
+      {(msg || !dataset.pronto || dataset.demo) && (
+        <div className="flex flex-col gap-3">
+          {msg && <Alert tom={msg.tom} titulo={msg.tom === "good" ? "Pronto" : msg.tom === "erro" ? "Falha" : "Informação"}>{msg.texto}</Alert>}
+          {!dataset.pronto && (
+            <Alert tom="warn" titulo="Sem base carregada">
+              Importe a base de CDs no passo 1 para rodar a análise. O estado da base vive na memória do servidor: depois de um período ocioso ou de um novo deploy, a importação precisa ser refeita.
+            </Alert>
+          )}
+          {dataset.pronto && dataset.demo && (
+            <Alert tom="info" titulo="Base de demonstração">
+              Você está vendo dados sintéticos. Importe as suas planilhas para trabalhar com a rede real.
+            </Alert>
+          )}
         </div>
       )}
 
       {/* --------------------- Chaves gerais das restrições -------------------- */}
-      <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="label">Restrições</span>
-          <Chave ligada={cobAtiva} onToggle={(v) => set({ limitesCoberturaAtivos: v })}>
-            Teto/piso de cobertura
-            {cobAtiva && (params.coberturaMaxDestinoDias > 0 || params.coberturaMinDestinoDias > 0) && (
-              <span className="ml-1 opacity-70">
-                {params.coberturaMaxDestinoDias > 0 ? `máx ${params.coberturaMaxDestinoDias}d` : ""}
-                {params.coberturaMaxDestinoDias > 0 && params.coberturaMinDestinoDias > 0 ? " · " : ""}
-                {params.coberturaMinDestinoDias > 0 ? `mín ${params.coberturaMinDestinoDias}d` : ""}
-              </span>
-            )}
-          </Chave>
-          <Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>
-            Caixa fechada e mínimos
-          </Chave>
-          <Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>
-            Capacidade operacional
-            {capAtiva && temCapacidade && <span className="ml-1 opacity-70">({unidadeCap})</span>}
-          </Chave>
-        </div>
-        <button type="button" onClick={algumaLigada ? desligarTudo : religarTudo} className="btn-ghost py-1.5 text-xs">
+      <section className="app-card restricoes" aria-label="Chaves gerais de restrição">
+        <span className="restricoes__tit">Restrições</span>
+        <Chave ligada={cobAtiva} onToggle={(v) => set({ limitesCoberturaAtivos: v })}>
+          Teto e piso de cobertura
+          {cobAtiva && (params.coberturaMaxDestinoDias > 0 || params.coberturaMinDestinoDias > 0) && (
+            <small style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--ink-2)" }}>
+              {[params.coberturaMaxDestinoDias > 0 && `teto ${params.coberturaMaxDestinoDias} d`, params.coberturaMinDestinoDias > 0 && `piso ${params.coberturaMinDestinoDias} d`].filter(Boolean).join(" · ")}
+            </small>
+          )}
+        </Chave>
+        <Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>Caixa fechada e mínimos</Chave>
+        <Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>
+          Capacidade operacional
+          {capAtiva && temCapacidade && <small style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--ink-2)" }}>em {unidadeCap}</small>}
+        </Chave>
+        <button type="button" onClick={algumaLigada ? desligarTudo : religarTudo} className="pgm-botao pgm-botao--secundario">
           {algumaLigada ? "Desligar todas as restrições" : "Religar restrições"}
         </button>
-      </div>
+      </section>
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-3">
-        {/* ------------------------- 1. Bases ------------------------- */}
-        <div className="min-w-0 lg:col-span-3">
+      <div className="fluxo">
+        {/* ------------------------------ Índice ------------------------------ */}
+        <ol className="passos" aria-label="Passos da análise">
+          <li className="passos__titulo">Passos</li>
+          {passos.map((p, i) => (
+            <li key={p.id}>
+              <a className="passo" href={`#${p.id}`} data-estado={p.estado}>
+                <span className="passo__n">{p.estado === "ok" ? <Icone nome="check" tamanho={14} espessura={3} /> : i + 1}</span>
+                <span><b>{p.nome}</b><small>{p.status}</small></span>
+              </a>
+            </li>
+          ))}
+        </ol>
+
+        <div className="fluxo__corpo">
+          {/* ------------------------- 1. Bases ------------------------- */}
           <Secao
+            flush
+            id="p1"
             titulo="1 · Bases da análise"
-            desc="A base de CDs vem no mesmo layout de antes, agora com todos os CDs empilhados — ela é a fonte de origem E de destino."
+            desc="Uma base só, com todos os CDs empilhados: ela é a fonte de origem e de destino."
             right={
-              <div className="text-right text-xs text-slate-500">
-                <div>{fmtInt(dataset.baseLinhas)} linhas · {fmtInt(dataset.produtos)} produtos · {dataset.cds.length} CDs</div>
-                <div>{fmtInt(dataset.pedidosLinhas)} linhas de pedido</div>
-                {dataset.dataPosicao && (
-                  <div className="mt-0.5">
-                    posição de {new Date(dataset.dataPosicao).toLocaleDateString("pt-BR")}
-                  </div>
-                )}
-                <div className="mt-1 flex justify-end gap-1">
-                  <Badge tom={uploadDireto ? "good" : "warn"}>
-                    {uploadDireto ? "Upload direto (arquivo grande)" : "Upload pela API (até 4,5 MB)"}
-                  </Badge>
-                  <Badge tom={resultadosDuraveis ? "good" : "warn"}>
-                    {resultadosDuraveis ? "Resultados persistidos" : "Resultados em memória"}
-                  </Badge>
-                </div>
+              <div className="app-card__resumo">
+                <b>{fmtInt(dataset.baseLinhas)}</b> linhas · <b>{fmtInt(dataset.produtos)}</b> produtos · <b>{dataset.cds.length}</b> CDs
+                <br /><b>{fmtInt(dataset.pedidosLinhas)}</b> linhas de pedido{dataBase && <> · posição de <b>{dataBase}</b></>}
               </div>
             }
           >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="label mb-1">Base de CDs (obrigatória)</div>
-                <input ref={baseRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" onChange={(e) => setBaseFile(e.target.files?.[0] ?? null)} className="input w-full text-xs" />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Colunas: CD · código do produto · estoque disponível · estoque objetivo · quantidade pendente ·
-                  venda média 3m · custo/preço · embalagem. Fonte atual: <b>{dataset.fonteBase || "—"}</b>
-                </p>
+            <div className="app-card__corpo">
+              <div className="parametros">
+                <Badge tom={uploadDireto ? "good" : "warn"}>{uploadDireto ? "Upload direto (arquivo grande)" : "Upload pela API (até 4,5 MB)"}</Badge>
+                <Badge tom={resultadosDuraveis ? "good" : "warn"}>{resultadosDuraveis ? "Resultados persistidos" : "Resultados em memória"}</Badge>
               </div>
-              <div>
-                <div className="label mb-1">Base de pedidos (para o modo Pedidos)</div>
-                <input ref={pedRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" onChange={(e) => setPedFile(e.target.files?.[0] ?? null)} className="input w-full text-xs" />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Colunas: ano-mês · CD destino · código do produto · pedido. Fonte atual: <b>{dataset.fontePedidos || "—"}</b>
-                </p>
-              </div>
-            </div>
 
-            <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-slate-100 pt-3">
-              <label className="block">
-                <span className="label block">Data da posição de estoque</span>
-                <input
-                  type="date"
-                  value={dataPosicao}
-                  onChange={(e) => setDataPosicao(e.target.value)}
-                  className="input mt-0.5 py-1.5 text-xs"
-                />
-              </label>
-              <p className="max-w-lg pb-1.5 text-[11px] text-slate-500">
-                <b>Quando a base foi extraída</b> — não quando você está subindo. É essa data que diz ao app se uma
-                transferência já faturada aparece ou não nos números: sem ela, ou o volume é descontado duas vezes,
-                ou a mesma transferência é sugerida de novo. Em branco = agora.
-              </p>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button onClick={() => enviar(true)} disabled={(!baseFile && !pedFile) || importando} className="btn-ghost">Validar (prévia)</button>
-              <button onClick={() => enviar(false)} disabled={(!baseFile && !pedFile) || importando} className="btn-secondary">Importar</button>
-              {importando && <div className="w-40"><Progress pct={progresso} /></div>}
-            </div>
-
-            {relatorio && (
-              <div className="mt-3 flex flex-col gap-1.5">
-                <div className="text-xs text-slate-600">
-                  {fmtInt(relatorio.baseLinhas)} linhas de base · {fmtInt(relatorio.pedidosLinhas)} de pedidos ·
-                  CDs: {relatorio.cdsBase.join(", ") || "—"}
+              <div className="opcoes">
+                <div className="pgm-campo" style={{ gap: 8 }}>
+                  <span className="pgm-campo__rotulo">Base de CDs · obrigatória</span>
+                  <input ref={baseRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="sr-only" id="arq-base" onChange={(e) => setBaseFile(e.target.files?.[0] ?? null)} />
+                  <div className="upload" data-ok={baseFile ? "true" : undefined}>
+                    <span className="upload__ico"><Icone nome={baseFile ? "check" : "upload"} tamanho={22} /></span>
+                    <div className="upload__txt">
+                      <b>{baseFile ? baseFile.name : "Nenhum arquivo escolhido"}</b>
+                      <span>{baseFile ? `${(baseFile.size / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB · pronto para validar` : "CSV, XLSX ou XLSB · CSV é mais rápido"}</span>
+                    </div>
+                    <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => baseRef.current?.click()}>{baseFile ? "Trocar" : "Escolher arquivo"}</button>
+                  </div>
+                  <span className="pgm-campo__ajuda">CD · código do produto · estoque disponível · estoque objetivo · quantidade pendente · venda média 3m · custo ou preço · embalagem.{dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}</span>
                 </div>
-                {relatorio.achados.map((a, i) => (
-                  <Alert key={i} tom={nivelTom[a.nivel]}>
-                    <b>{a.mensagem}</b> {a.qtd > 0 && <span className="opacity-70">({fmtInt(a.qtd)})</span>}
-                    {a.exemplos && a.exemplos.length > 0 && (
-                      <div className="mt-0.5 text-xs opacity-80">{a.exemplos.slice(0, 6).join(" · ")}</div>
-                    )}
-                  </Alert>
-                ))}
+                <div className="pgm-campo" style={{ gap: 8 }}>
+                  <span className="pgm-campo__rotulo">Base de pedidos · para o modo pedidos</span>
+                  <input ref={pedRef} type="file" accept=".csv,.xlsx,.xls,.xlsb" className="sr-only" id="arq-ped" onChange={(e) => setPedFile(e.target.files?.[0] ?? null)} />
+                  <div className="upload" data-ok={pedFile ? "true" : undefined}>
+                    <span className="upload__ico"><Icone nome={pedFile ? "check" : "upload"} tamanho={22} /></span>
+                    <div className="upload__txt">
+                      <b>{pedFile ? pedFile.name : "Nenhum arquivo escolhido"}</b>
+                      <span>{pedFile ? `${(pedFile.size / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB · pronto para validar` : "CSV, XLSX ou XLSB"}</span>
+                    </div>
+                    <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => pedRef.current?.click()}>{pedFile ? "Trocar" : "Escolher arquivo"}</button>
+                  </div>
+                  <span className="pgm-campo__ajuda">Ano-mês · CD destino · código do produto · pedido.{dataset.fontePedidos && <> Fonte atual: <b>{dataset.fontePedidos}</b>.</>}</span>
+                </div>
               </div>
-            )}
-          </Secao>
-        </div>
 
-        {/* ------------------- 2. Modo de demanda -------------------- */}
-        <div className="min-w-0 lg:col-span-1">
-          <Secao titulo="2 · O que o destino precisa" desc="Define a demanda que a análise vai tentar cobrir.">
-            <div className="flex flex-col gap-2">
-              <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 ${!modoPedidos ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
-                <input type="radio" checked={!modoPedidos} onChange={() => set({ modoDemanda: "saldo_ideal" })} className="mt-0.5" />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800">Só o saldo ideal</span>
-                  <span className="block text-xs text-slate-500">Necessidade = estoque objetivo − disponível − pendente. Não usa a base de pedidos.</span>
-                </span>
-              </label>
-              <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 ${modoPedidos ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
-                <input type="radio" checked={modoPedidos} onChange={() => set({ modoDemanda: "pedidos" })} className="mt-0.5" />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800">Consumir os pedidos futuros</span>
-                  <span className="block text-xs text-slate-500">Necessidade = pedidos projetados mês a mês. A transferência abate a compra planejada.</span>
-                </span>
-              </label>
+              <hr className="divisor" />
+              <div className="campo-linha">
+                <Campo rotulo="Data da posição de estoque" htmlFor="data-posicao" style={{ maxWidth: 220 }}>
+                  <input id="data-posicao" type="date" value={dataPosicao} onChange={(e) => setDataPosicao(e.target.value)} className="pgm-campo__controle" />
+                </Campo>
+                <p className="ajuda" style={{ maxWidth: 640, paddingBottom: 8 }}>
+                  <b>Quando a base foi extraída</b>, não quando você está subindo. É essa data que diz se uma transferência já faturada aparece nos números. Sem ela, o volume é descontado duas vezes ou a mesma transferência é sugerida de novo. Em branco = agora.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" onClick={() => enviar(true)} disabled={(!baseFile && !pedFile) || importando} className="pgm-botao pgm-botao--secundario">Validar (prévia)</button>
+                <button type="button" onClick={() => enviar(false)} disabled={(!baseFile && !pedFile) || importando} className="pgm-botao">Importar</button>
+                {importando && <div style={{ width: 280 }}><Progress pct={progresso} label="Enviando e validando…" /></div>}
+              </div>
+
+              {relatorio && (
+                <div className="flex flex-col gap-3">
+                  <p className="ajuda">
+                    {fmtInt(relatorio.baseLinhas)} linhas de base · {fmtInt(relatorio.pedidosLinhas)} de pedidos · CDs: {relatorio.cdsBase.join(", ") || "nenhum"}
+                  </p>
+                  {relatorio.achados.length === 0 && <Alert tom="good" titulo="Validação sem achados">Nenhuma inconsistência encontrada nas bases enviadas.</Alert>}
+                  {relatorio.achados.map((a, i) => (
+                    <Alert key={i} tom={nivelAchado(a.nivel)} titulo={`${a.nivel === "erro" ? "Erro" : a.nivel === "aviso" ? "Atenção" : "Informação"}${a.qtd > 0 ? ` · ${fmtInt(a.qtd)}` : ""}`}>
+                      {a.mensagem}
+                      {a.exemplos && a.exemplos.length > 0 && <> Exemplos: {a.exemplos.slice(0, 6).join(" · ")}.</>}
+                    </Alert>
+                  ))}
+                </div>
+              )}
             </div>
+          </Secao>
 
-            {modoPedidos && (
-              <div className="mt-3">
-                <div className="label mb-1">Horizonte (meses da base de pedidos)</div>
-                <div className="flex flex-wrap gap-1.5">
+          {/* ------------------- 2. Modo de demanda -------------------- */}
+          <Secao flush id="p2" titulo="2 · O que o destino precisa" desc="Define a demanda que a análise vai tentar cobrir.">
+            <div className="app-card__corpo">
+              <div className="opcoes">
+                <label className="opcao" data-ativo={!modoPedidos ? "true" : undefined}>
+                  <input type="radio" name="demanda" checked={!modoPedidos} onChange={() => set({ modoDemanda: "saldo_ideal" })} />
+                  <div><b>Só o saldo ideal</b><span>Necessidade = estoque objetivo menos disponível e pendente. Não usa a base de pedidos.</span></div>
+                </label>
+                <label className="opcao" data-ativo={modoPedidos ? "true" : undefined}>
+                  <input type="radio" name="demanda" checked={modoPedidos} onChange={() => set({ modoDemanda: "pedidos" })} />
+                  <div><b>Consumir os pedidos futuros</b><span>Necessidade = pedidos projetados mês a mês. A transferência abate a compra planejada.</span></div>
+                </label>
+              </div>
+
+              <div>
+                <p className="pgm-campo__rotulo" style={{ margin: "0 0 8px" }}>Meses do horizonte · só no modo pedidos</p>
+                <div className="chips">
                   {mesesDisponiveis.map((m) => {
                     const ativo = params.horizonteMeses.includes(m);
                     return (
                       <button
                         key={m}
                         type="button"
-                        onClick={() =>
-                          set({
-                            horizonteMeses: ativo
-                              ? params.horizonteMeses.filter((x) => x !== m)
-                              : [...params.horizonteMeses, m].sort(),
-                          })
-                        }
-                        className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${ativo ? "border-brand-500 bg-brand-50 text-brand-700" : "border-slate-300 text-slate-600"}`}
+                        className="chip-mes"
+                        aria-pressed={ativo}
+                        disabled={!modoPedidos}
+                        onClick={() => set({ horizonteMeses: ativo ? params.horizonteMeses.filter((x) => x !== m) : [...params.horizonteMeses, m].sort() })}
                       >
                         {rotuloMes(m)}
                       </button>
                     );
                   })}
-                  {mesesDisponiveis.length === 0 && <span className="text-xs text-slate-400">Importe a base de pedidos.</span>}
+                  {mesesDisponiveis.length === 0 && <span className="ajuda">Importe a base de pedidos para escolher os meses.</span>}
                 </div>
-                <p className="mt-1.5 text-[11px] text-slate-500">A cascata segue mês a mês: o mês 1 de todos os destinos antes do mês 2.</p>
+                {modoPedidos && <p className="ajuda" style={{ marginTop: 8 }}>A cascata segue mês a mês: o mês 1 de todos os destinos antes do mês 2.</p>}
               </div>
-            )}
 
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="label">Limites de cobertura do destino</span>
-                <Chave ligada={cobAtiva} onToggle={(v) => set({ limitesCoberturaAtivos: v })}>
-                  {cobAtiva ? "ativo" : "desligado"}
-                </Chave>
+              <hr className="divisor" />
+              <div className="flex flex-wrap items-end gap-4" style={{ opacity: cobAtiva ? 1 : 0.5 }}>
+                <Campo rotulo="Teto de cobertura (dias)" htmlFor="teto" ajuda="Corta demanda inflada. 0 = sem teto. Sugestão: 60 a 90." style={{ maxWidth: 240 }}>
+                  <input id="teto" type="number" min="0" disabled={!cobAtiva} value={params.coberturaMaxDestinoDias} onChange={(e) => set({ coberturaMaxDestinoDias: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <Campo rotulo="Piso de cobertura (dias)" htmlFor="piso" ajuda="Garante o mínimo antirruptura. 0 = sem piso. Sugestão: 15 a 30." style={{ maxWidth: 240 }}>
+                  <input id="piso" type="number" min="0" disabled={!cobAtiva} value={params.coberturaMinDestinoDias} onChange={(e) => set({ coberturaMinDestinoDias: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                {!cobAtiva && <span className="ajuda" style={{ paddingBottom: 10 }}>Chave "Teto e piso" desligada: os valores ficam guardados.</span>}
               </div>
-              <div className={`grid grid-cols-2 gap-2 ${cobAtiva ? "" : "opacity-40"}`}>
-                <label className="block">
-                  <span className="block text-[11px] text-slate-500">Teto (dias) · 0 = sem teto · sugerido 60–90</span>
-                  <input type="number" min="0" disabled={!cobAtiva} value={params.coberturaMaxDestinoDias} onChange={(e) => set({ coberturaMaxDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] text-slate-500">Piso (dias) · 0 = sem piso · sugerido 15–30</span>
-                  <input type="number" min="0" disabled={!cobAtiva} value={params.coberturaMinDestinoDias} onChange={(e) => set({ coberturaMinDestinoDias: Number(e.target.value) })} className="input mt-0.5 w-full py-1.5 text-xs" />
-                </label>
-              </div>
-              <p className="mt-1.5 text-[11px] text-slate-500">
-                O <b>teto</b> impede que um estoque objetivo inflado (ou meses de pedido) puxe volume demais para um CD.
-                O <b>piso</b> garante o mínimo antirruptura mesmo com objetivo defasado ou zerado. SKU sem giro no destino
-                ignora os dois.
-              </p>
               {params.coberturaMaxDestinoDias > 0 && params.coberturaMinDestinoDias > params.coberturaMaxDestinoDias && (
-                <div className="mt-2"><Alert tom="erro">O piso não pode ser maior que o teto.</Alert></div>
+                <Alert tom="erro" titulo="Piso maior que o teto">O piso não pode ser maior que o teto de cobertura.</Alert>
               )}
-            </div>
+              <p className="ajuda">O <b>teto</b> impede que um estoque objetivo inflado, ou meses de pedido, puxe volume demais para um CD. O <b>piso</b> garante o mínimo antirruptura mesmo com objetivo defasado ou zerado. SKU sem giro no destino ignora os dois.</p>
 
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <label className="flex items-start gap-2">
-                <input type="checkbox" checked={params.considerarAprovadas} onChange={(e) => set({ considerarAprovadas: e.target.checked })} className="mt-0.5" />
-                <span>
-                  <span className="block text-sm font-medium text-slate-800">Considerar sugestões já aprovadas</span>
-                  <span className="block text-xs text-slate-500">
-                    Desconta o excesso da origem e trata o volume como trânsito no destino, até o faturamento ser importado.
-                  </span>
-                </span>
+              <hr className="divisor" />
+              <label className="marca">
+                <input type="checkbox" checked={params.considerarAprovadas} onChange={(e) => set({ considerarAprovadas: e.target.checked })} />
+                <span>Considerar sugestões já aprovadas<small>Desconta o excesso da origem e trata o volume como trânsito no destino, até o faturamento ser importado.</small></span>
               </label>
             </div>
           </Secao>
-        </div>
 
-        {/* ---------------- 3. Sequência de origens ----------------- */}
-        <div className="min-w-0 lg:col-span-1">
-          <Secao titulo="3 · Sequência das origens" desc="Quem escoa o excesso primeiro. A ordem muda o resultado.">
-            <SequenciaCds papel="origem" selecionados={params.origens} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ origens: cds })} />
-            <div className="mt-3 border-t border-slate-100 pt-3">
-              <label className="flex items-start gap-2">
-                <input type="checkbox" checked={params.considerarPendenteOrigem} onChange={(e) => set({ considerarPendenteOrigem: e.target.checked })} className="mt-0.5" />
-                <span>
-                  <span className="block text-sm font-medium text-slate-800">Somar a quantidade pendente ao excesso</span>
-                  <span className="block text-xs text-slate-500">
-                    Ligado: excesso de planejamento (conta o que ainda vai entrar). Desligado: excesso <b>físico</b> —
-                    só o que já está no CD pode ser oferecido, sem sugerir a transferência do que não chegou.
-                  </span>
-                </span>
+          {/* ---------------- 3. Sequência de origens ----------------- */}
+          <Secao flush id="p3" titulo="3 · Sequência das origens" desc="Quem escoa o excesso primeiro. A ordem muda o resultado.">
+            <div className="app-card__corpo">
+              <SequenciaCds papel="origem" selecionados={params.origens} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ origens: cds })} />
+              <hr className="divisor" />
+              <label className="marca">
+                <input type="checkbox" checked={params.considerarPendenteOrigem} onChange={(e) => set({ considerarPendenteOrigem: e.target.checked })} />
+                <span>Somar a quantidade pendente ao excesso<small>Ligado: excesso de planejamento, conta o que ainda vai entrar. Desligado: excesso físico, só o que já está no CD é oferecido.</small></span>
               </label>
             </div>
           </Secao>
-        </div>
 
-        {/* ---------------- 4. Ordem dos destinos ------------------- */}
-        <div className="min-w-0 lg:col-span-1">
-          <Secao titulo="4 · Ordem dos destinos" desc="Cada origem olha todos estes destinos, nesta prioridade.">
-            <SequenciaCds papel="destino" selecionados={params.destinos} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ destinos: cds })} excluir={params.origens} />
-            <div className="mt-3 border-t border-slate-100 pt-3">
-              <div className="label mb-1.5">Quando o excesso não cobre todos</div>
-              <div className="flex flex-col gap-2">
-                <label className={`flex cursor-pointer gap-2 rounded-lg border p-2.5 ${params.estrategiaDestino === "prioridade" ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
-                  <input type="radio" checked={params.estrategiaDestino === "prioridade"} onChange={() => set({ estrategiaDestino: "prioridade" })} className="mt-0.5" />
-                  <span>
-                    <span className="block text-sm font-semibold text-slate-800">Prioridade estrita</span>
-                    <span className="block text-xs text-slate-500">O destino 1 é atendido por inteiro antes do 2.</span>
-                  </span>
-                </label>
-                <label className={`flex cursor-pointer gap-2 rounded-lg border p-2.5 ${params.estrategiaDestino === "nivelar_cobertura" ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
-                  <input type="radio" checked={params.estrategiaDestino === "nivelar_cobertura"} onChange={() => set({ estrategiaDestino: "nivelar_cobertura" })} className="mt-0.5" />
-                  <span>
-                    <span className="block text-sm font-semibold text-slate-800">Nivelar dias de cobertura</span>
-                    <span className="block text-xs text-slate-500">Enche primeiro quem está mais descoberto — evita ruptura no último da fila.</span>
-                  </span>
-                </label>
+          {/* ---------------- 4. Ordem dos destinos ------------------- */}
+          <Secao flush id="p4" titulo="4 · Ordem dos destinos" desc="Cada origem olha todos estes destinos, nesta prioridade.">
+            <div className="app-card__corpo">
+              <SequenciaCds papel="destino" selecionados={params.destinos} disponiveis={dataset.cds} info={infoPorCd} onChange={(cds) => set({ destinos: cds })} excluir={params.origens} />
+              {params.destinos.some((d) => params.origens.includes(d)) && (
+                <Alert tom="info" titulo="CD nas duas listas">Um CD pode ser origem e destino ao mesmo tempo. A única regra: nenhum CD transfere para si mesmo.</Alert>
+              )}
+              <hr className="divisor" />
+              <div>
+                <p className="pgm-campo__rotulo" style={{ margin: "0 0 8px" }}>Como repartir o excesso escasso</p>
+                <div className="opcoes">
+                  <label className="opcao" data-ativo={params.estrategiaDestino === "prioridade" ? "true" : undefined}>
+                    <input type="radio" name="estrategia" checked={params.estrategiaDestino === "prioridade"} onChange={() => set({ estrategiaDestino: "prioridade" })} />
+                    <div><b>Prioridade estrita</b><span>O primeiro destino leva o que precisar; o último pode ficar sem nada.</span></div>
+                  </label>
+                  <label className="opcao" data-ativo={params.estrategiaDestino === "nivelar_cobertura" ? "true" : undefined}>
+                    <input type="radio" name="estrategia" checked={params.estrategiaDestino === "nivelar_cobertura"} onChange={() => set({ estrategiaDestino: "nivelar_cobertura" })} />
+                    <div><b>Nivelar dias de cobertura</b><span>Reparte pelo giro e enche primeiro quem está mais descoberto.</span></div>
+                  </label>
+                </div>
               </div>
             </div>
-
-            {params.destinos.some((d) => params.origens.includes(d)) && (
-              <div className="mt-2">
-                <Alert tom="info">CDs que são origem e destino ao mesmo tempo são permitidos — o motor só nunca transfere um CD para ele mesmo.</Alert>
-              </div>
-            )}
           </Secao>
-        </div>
 
-        {/* -------------------- 5. Parâmetros ---------------------- */}
-        <div className="min-w-0 lg:col-span-3">
+          {/* -------------------- 5. Parâmetros ---------------------- */}
           <Secao
+            flush
+            id="p5"
             titulo="5 · Parâmetros, embarque e alíquotas por rota"
             desc="O ICMS depende do par origem → destino, por isso a alíquota é por rota."
-            right={
-              <Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>
-                Caixa fechada e mínimos {embAtiva ? "ativos" : "desligados"}
-              </Chave>
-            }
+            right={<Chave ligada={embAtiva} onToggle={(v) => set({ limitesEmbarqueAtivos: v })}>Caixa fechada e mínimos</Chave>}
           >
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="app-card__corpo">
+              <div className="campos" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" }}>
+                <Campo rotulo="Fator de segurança (imediata)" htmlFor="fs" ajuda="Retém venda média × fator antes de liberar a saída de hoje.">
+                  <input id="fs" type="number" step="0.1" min="0" value={params.fatorSegurancaImediata} onChange={(e) => set({ fatorSegurancaImediata: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <Campo rotulo="Limite de cobertura (dias)" htmlFor="lc" ajuda="Classifica o SKU parado na origem.">
+                  <input id="lc" type="number" min="1" value={params.limiteCoberturaDias} onChange={(e) => set({ limiteCoberturaDias: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <Campo rotulo="Mínimo por linha (un)" htmlFor="mu" ajuda="Abaixo disso a linha não embarca." style={{ opacity: embAtiva ? 1 : 0.5 }}>
+                  <input id="mu" type="number" min="0" disabled={!embAtiva} value={params.minUnidadesLinha} onChange={(e) => set({ minUnidadesLinha: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <Campo rotulo="Mínimo por linha (R$)" htmlFor="mv" ajuda="Corta a cauda longa sem valor." style={{ opacity: embAtiva ? 1 : 0.5 }}>
+                  <input id="mv" type="number" min="0" step="10" disabled={!embAtiva} value={params.minValorLinha} onChange={(e) => set({ minValorLinha: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <Campo rotulo="Carga mínima por rota (R$)" htmlFor="mr" ajuda="Rota abaixo do piso sai do plano inteira." style={{ opacity: embAtiva ? 1 : 0.5 }}>
+                  <input id="mr" type="number" min="0" step="100" disabled={!embAtiva} value={params.minValorRota} onChange={(e) => set({ minValorRota: Number(e.target.value) })} className="pgm-campo__controle" />
+                </Campo>
+                <div style={{ paddingTop: 22, opacity: embAtiva ? 1 : 0.5 }}>
+                  <label className="marca">
+                    <input type="checkbox" disabled={!embAtiva} checked={params.arredondarCaixaFechada} onChange={(e) => set({ arredondarCaixaFechada: e.target.checked })} />
+                    <span>Só caixa fechada<small>Transfere múltiplos da embalagem; o resto fica na origem.</small></span>
+                  </label>
+                </div>
+              </div>
+
+              <hr className="divisor" />
               <div>
-                <div className="label mb-1">Fator de segurança (imediata)</div>
-                <input type="number" step="0.1" min="0" value={params.fatorSegurancaImediata} onChange={(e) => set({ fatorSegurancaImediata: Number(e.target.value) })} className="input w-full" />
-                <p className="mt-1 text-[11px] text-slate-500">Retém venda média × fator antes de liberar a saída de hoje.</p>
-              </div>
-              <div>
-                <div className="label mb-1">Limite de cobertura (dias)</div>
-                <input type="number" min="1" value={params.limiteCoberturaDias} onChange={(e) => set({ limiteCoberturaDias: Number(e.target.value) })} className="input w-full" />
-                <p className="mt-1 text-[11px] text-slate-500">Classifica o SKU parado na origem.</p>
-              </div>
-              <div className={embAtiva ? "" : "opacity-40"}>
-                <div className="label mb-1">Mínimo por linha (un)</div>
-                <input type="number" min="0" disabled={!embAtiva} value={params.minUnidadesLinha} onChange={(e) => set({ minUnidadesLinha: Number(e.target.value) })} className="input w-full" />
-                <p className="mt-1 text-[11px] text-slate-500">Abaixo disso a linha não embarca.</p>
-              </div>
-              <div className={embAtiva ? "" : "opacity-40"}>
-                <div className="label mb-1">Mínimo por linha (R$)</div>
-                <input type="number" min="0" step="10" disabled={!embAtiva} value={params.minValorLinha} onChange={(e) => set({ minValorLinha: Number(e.target.value) })} className="input w-full" />
-                <p className="mt-1 text-[11px] text-slate-500">Corta a cauda longa sem valor.</p>
-              </div>
-              <div className={embAtiva ? "" : "opacity-40"}>
-                <div className="label mb-1">Carga mínima por rota (R$)</div>
-                <input type="number" min="0" step="100" disabled={!embAtiva} value={params.minValorRota} onChange={(e) => set({ minValorRota: Number(e.target.value) })} className="input w-full" />
-                <p className="mt-1 text-[11px] text-slate-500">Rota abaixo do piso sai do plano inteira.</p>
-              </div>
-              <div className={`flex items-start pt-5 ${embAtiva ? "" : "opacity-40"}`}>
-                <label className="flex items-start gap-2">
-                  <input type="checkbox" disabled={!embAtiva} checked={params.arredondarCaixaFechada} onChange={(e) => set({ arredondarCaixaFechada: e.target.checked })} className="mt-0.5" />
-                  <span>
-                    <span className="block text-sm font-medium text-slate-800">Só caixa fechada</span>
-                    <span className="block text-[11px] text-slate-500">Transfere múltiplos da embalagem; o resto fica na origem.</span>
-                  </span>
-                </label>
-              </div>
-              <div className="md:col-span-4">
-                <div className="label mb-1">Resumo da rede</div>
-                <div className="flex flex-wrap gap-1.5 pt-1">
+                <p className="pgm-campo__rotulo" style={{ margin: "0 0 8px" }}>Resumo da rede</p>
+                <div className="parametros">
                   <Badge tom="azul">{params.origens.length} origem(ns)</Badge>
-                  <Badge tom="brand">{params.destinos.length} destino(s)</Badge>
+                  <Badge tom="azul">{params.destinos.length} destino(s)</Badge>
                   <Badge>{rotas.length} rota(s)</Badge>
-                  <Badge tom={modoPedidos ? "warn" : "good"}>{modoPedidos ? `Pedidos · ${params.horizonteMeses.length} mês(es)` : "Saldo ideal"}</Badge>
-                  {cobAtiva && params.coberturaMaxDestinoDias > 0 && <Badge>Teto {params.coberturaMaxDestinoDias}d</Badge>}
-                  {cobAtiva && params.coberturaMinDestinoDias > 0 && <Badge>Piso {params.coberturaMinDestinoDias}d</Badge>}
-                  {params.estrategiaDestino === "nivelar_cobertura" && <Badge tom="azul">Nivelando cobertura</Badge>}
-                  {!params.considerarPendenteOrigem && <Badge tom="azul">Excesso físico</Badge>}
+                  <Badge>{modoPedidos ? `Pedidos · ${params.horizonteMeses.length} mês(es)` : "Saldo ideal"}</Badge>
+                  {cobAtiva && params.coberturaMaxDestinoDias > 0 && <Badge>Teto {params.coberturaMaxDestinoDias} d</Badge>}
+                  {cobAtiva && params.coberturaMinDestinoDias > 0 && <Badge>Piso {params.coberturaMinDestinoDias} d</Badge>}
+                  {params.estrategiaDestino === "nivelar_cobertura" && <Badge>Nivelando cobertura</Badge>}
+                  {!params.considerarPendenteOrigem && <Badge>Excesso físico</Badge>}
                   {embAtiva && params.arredondarCaixaFechada && <Badge>Caixa fechada</Badge>}
                   {capAtiva && temCapacidade && <Badge tom="warn">Capacidade limitada ({unidadeCap})</Badge>}
                   {!cobAtiva && !embAtiva && !capAtiva && <Badge tom="good">Sem restrições</Badge>}
@@ -581,43 +553,135 @@ export default function NovaAnalise() {
             </div>
 
             {rotas.length > 0 && (
-              <div className="mt-4 overflow-x-auto thin-scroll">
-                <table className="min-w-full">
+              <>
+                <Rolagem>
+                  <table className="pgm-tabela">
+                    <thead>
+                      <tr>
+                        <th>Alíquota de ICMS</th>
+                        {params.destinos.map((d) => <th key={d} className="pgm-num">→ CD {d}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {params.origens.map((o) => (
+                        <tr key={o}>
+                          <td><span className="cd">CD {o} →</span></td>
+                          {params.destinos.map((d) => {
+                            if (o === d) return <td key={d} className="pgm-num" style={{ color: "var(--ink-3)" }}>mesmo CD</td>;
+                            const rota = `${o}>${d}`;
+                            const v = params.aliquotas[rota];
+                            return (
+                              <td key={d} className="pgm-num">
+                                <span className="aliq" data-vazio={v === undefined ? "true" : undefined}>
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    className="pgm-campo__controle"
+                                    placeholder="0,000"
+                                    aria-label={`Alíquota CD ${o} para CD ${d}`}
+                                    defaultValue={aliquotaTexto(rota)}
+                                    key={`${rota}-${aliquotaTexto(rota)}`}
+                                    onBlur={(e) => setAliquota(rota, e.target.value)}
+                                  />
+                                  <small>{v === undefined ? "sem alíquota" : `${(v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`}</small>
+                                </span>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Rolagem>
+                <div className="app-card__corpo" style={{ paddingTop: 16 }}>
+                  <p className="ajuda">Informe em fração: 0,052 = 5,2%. Rotas sem alíquota entram no plano, mas o impacto fiscal fica subestimado; o dashboard avisa.</p>
+                </div>
+              </>
+            )}
+          </Secao>
+
+          {/* ------------------ 6. Capacidade operacional -------------- */}
+          <Secao
+            flush
+            id="p6"
+            titulo="6 · Capacidade operacional"
+            desc="O limite físico da rede na janela desta análise: quanto cada CD expede, quanto recebe e quanto cada rota transporta. Em branco = sem limite."
+            right={<Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>Limites de capacidade</Chave>}
+          >
+            <div className="app-card__corpo">
+              <div className="campo-linha">
+                <Campo rotulo="Métrica" htmlFor="metrica" style={{ minWidth: 240 }}>
+                  <select id="metrica" value={cap.metrica} onChange={(e) => setCap({ metrica: e.target.value as MetricaCapacidade })} className="pgm-campo__controle">
+                    {METRICAS.map((m) => <option key={m.valor} value={m.valor}>{m.rotulo} ({m.unidade})</option>)}
+                  </select>
+                </Campo>
+                <Campo rotulo="Com capacidade escassa, carrega primeiro" htmlFor="prioridade" style={{ minWidth: 320 }}>
+                  <select id="prioridade" value={cap.prioridade} onChange={(e) => setCap({ prioridade: e.target.value as "valor" | "urgencia" })} className="pgm-campo__controle">
+                    <option value="valor">O SKU de maior valor</option>
+                    <option value="urgencia">O SKU mais urgente no destino</option>
+                  </select>
+                </Campo>
+              </div>
+
+              {metricaAtual?.requer && (
+                <Alert tom="info" titulo="Sobre a métrica">
+                  <b>{metricaAtual.rotulo}</b> usa a coluna <b>{metricaAtual.requer}</b> da base. SKU sem esse dado não consome capacidade; a análise informa quantos ficaram de fora da conta.
+                </Alert>
+              )}
+              {!capAtiva && temCapacidade && (
+                <Alert tom="info" titulo="Limites desligados">Os valores abaixo ficam guardados e voltam a valer quando você religar a chave.</Alert>
+              )}
+
+              <div className="opcoes" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))", gap: 32, opacity: capAtiva ? 1 : 0.5 }}>
+                <div className="flex flex-col gap-3">
+                  <p className="pgm-campo__rotulo" style={{ margin: 0 }}>Expedição por origem ({unidadeCap})</p>
+                  {params.origens.map((cd) => (
+                    <div key={cd} className="limite">
+                      <b>CD {cd}</b>
+                      <input type="number" min="0" placeholder="sem limite" disabled={!capAtiva} value={cap.porOrigem?.[cd] ?? ""} onChange={(e) => setLimite("porOrigem", cd, e.target.value)} className="pgm-campo__controle" aria-label={`Expedição do CD ${cd}`} />
+                      <span>separação e embarque</span>
+                    </div>
+                  ))}
+                  {params.origens.length === 0 && <span className="ajuda">Escolha as origens no passo 3.</span>}
+                </div>
+                <div className="flex flex-col gap-3">
+                  <p className="pgm-campo__rotulo" style={{ margin: 0 }}>Recebimento por destino ({unidadeCap})</p>
+                  {params.destinos.map((cd) => (
+                    <div key={cd} className="limite">
+                      <b>CD {cd}</b>
+                      <input type="number" min="0" placeholder="sem limite" disabled={!capAtiva} value={cap.porDestino?.[cd] ?? ""} onChange={(e) => setLimite("porDestino", cd, e.target.value)} className="pgm-campo__controle" aria-label={`Recebimento do CD ${cd}`} />
+                      <span>docas, conferência, endereços</span>
+                    </div>
+                  ))}
+                  {params.destinos.length === 0 && <span className="ajuda">Escolha os destinos no passo 4.</span>}
+                </div>
+              </div>
+
+              <hr className="divisor" />
+              <label className="marca">
+                <input type="checkbox" disabled={!capAtiva} checked={limitarRota} onChange={(e) => setLimitarRota(e.target.checked)} />
+                <span>Limitar também o transporte por rota<small>Frota disponível entre cada par de CDs.</small></span>
+              </label>
+            </div>
+            {limitarRota && rotas.length > 0 && (
+              <Rolagem>
+                <table className="pgm-tabela">
                   <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="th">Rota</th>
-                      {params.destinos.map((d) => <th key={d} className="th text-right">→ CD {d}</th>)}
+                    <tr>
+                      <th>Transporte ({unidadeCap})</th>
+                      {params.destinos.map((d) => <th key={d} className="pgm-num">→ CD {d}</th>)}
                     </tr>
                   </thead>
                   <tbody>
                     {params.origens.map((o) => (
-                      <tr key={o} className="border-b border-slate-100">
-                        <td className="td font-semibold">CD {o} →</td>
+                      <tr key={o}>
+                        <td><span className="cd">CD {o} →</span></td>
                         {params.destinos.map((d) => (
-                          <td key={d} className="td text-right">
+                          <td key={d} className="pgm-num">
                             {o === d ? (
-                              <span className="text-slate-300">—</span>
+                              <span style={{ color: "var(--ink-3)" }}>mesmo CD</span>
                             ) : (
-                              <div className="flex items-center justify-end gap-1">
-                                <input
-                                  type="number"
-                                  step="0.001"
-                                  min="0"
-                                  placeholder="0,000"
-                                  value={params.aliquotas[`${o}>${d}`] ?? ""}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    const novo = { ...params.aliquotas };
-                                    if (v === "") delete novo[`${o}>${d}`];
-                                    else novo[`${o}>${d}`] = Number(v);
-                                    set({ aliquotas: novo });
-                                  }}
-                                  className="input w-24 py-1 text-right text-xs"
-                                />
-                                <span className="text-[11px] text-slate-400">
-                                  {params.aliquotas[`${o}>${d}`] !== undefined ? `${(params.aliquotas[`${o}>${d}`] * 100).toFixed(1)}%` : "—"}
-                                </span>
-                              </div>
+                              <input type="number" min="0" placeholder="sem limite" className="pgm-campo__controle pgm-campo__controle--pequeno" style={{ width: 120, textAlign: "right" }} value={cap.porRota?.[`${o}>${d}`] ?? ""} onChange={(e) => setLimite("porRota", `${o}>${d}`, e.target.value)} aria-label={`Transporte CD ${o} para CD ${d}`} />
                             )}
                           </td>
                         ))}
@@ -625,196 +689,55 @@ export default function NovaAnalise() {
                     ))}
                   </tbody>
                 </table>
-                <p className="mt-1 text-[11px] text-slate-500">Informe em fração: 0,052 = 5,2%. Rotas sem alíquota entram no plano, mas o impacto fiscal fica subestimado (o dashboard avisa).</p>
-              </div>
+              </Rolagem>
             )}
-          </Secao>
-        </div>
-
-        {/* ------------------ 6. Capacidade operacional -------------- */}
-        <div className="min-w-0 lg:col-span-3">
-          <Secao
-            titulo="6 · Capacidade operacional"
-            desc="O limite físico da rede na janela desta análise: quanto cada CD expede, quanto recebe e quanto cada rota transporta. Deixe 0 para sem limite."
-            right={
-              <div className="flex flex-wrap items-end gap-2">
-                <div className="pb-1.5">
-                  <Chave ligada={capAtiva} onToggle={(v) => setCap({ ativa: v })}>
-                    {capAtiva ? "Limites ativos" : "Limites desligados"}
-                  </Chave>
-                </div>
-                <label className="block">
-                  <span className="label block">Métrica</span>
-                  <select
-                    value={cap.metrica}
-                    onChange={(e) => setCap({ metrica: e.target.value as MetricaCapacidade })}
-                    className="input mt-0.5 py-1.5 text-xs"
-                  >
-                    {METRICAS.map((m) => (
-                      <option key={m.valor} value={m.valor}>{m.rotulo} ({m.unidade})</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="label block">Com capacidade escassa, carrega primeiro</span>
-                  <select
-                    value={cap.prioridade}
-                    onChange={(e) => setCap({ prioridade: e.target.value as "valor" | "urgencia" })}
-                    className="input mt-0.5 py-1.5 text-xs"
-                  >
-                    <option value="valor">O SKU de maior valor</option>
-                    <option value="urgencia">O SKU mais urgente no destino</option>
-                  </select>
-                </label>
-              </div>
-            }
-          >
-            {metricaAtual?.requer && (
-              <div className="mb-3">
-                <Alert tom="info">
-                  A métrica <b>{metricaAtual.rotulo}</b> usa a coluna <b>{metricaAtual.requer}</b> da base. SKU sem esse
-                  dado não consome capacidade — a análise informa quantos ficaram de fora da conta.
-                </Alert>
-              </div>
-            )}
-
-            {!capAtiva && temCapacidade && (
-              <div className="mb-3">
-                <Alert tom="info">
-                  Limites <b>desligados</b> — os valores abaixo ficam guardados e voltam a valer quando você religar a chave.
-                </Alert>
-              </div>
-            )}
-
-            <div className={`grid gap-4 md:grid-cols-2 ${capAtiva ? "" : "opacity-40"}`}>
-              <div>
-                <div className="label mb-1.5">Expedição por origem ({unidadeCap})</div>
-                <div className="flex flex-col gap-1.5">
-                  {params.origens.map((cd) => (
-                    <label key={cd} className="flex items-center gap-2">
-                      <span className="w-20 shrink-0 text-sm font-medium text-slate-700">CD {cd}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="sem limite"
-                        disabled={!capAtiva}
-                        value={cap.porOrigem?.[cd] ?? ""}
-                        onChange={(e) => setLimite("porOrigem", cd, e.target.value)}
-                        className="input w-40 py-1.5 text-right text-xs"
-                      />
-                      <span className="text-[11px] text-slate-400">separação e embarque</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <div className="label mb-1.5">Recebimento por destino ({unidadeCap})</div>
-                <div className="flex flex-col gap-1.5">
-                  {params.destinos.map((cd) => (
-                    <label key={cd} className="flex items-center gap-2">
-                      <span className="w-20 shrink-0 text-sm font-medium text-slate-700">CD {cd}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="sem limite"
-                        disabled={!capAtiva}
-                        value={cap.porDestino?.[cd] ?? ""}
-                        onChange={(e) => setLimite("porDestino", cd, e.target.value)}
-                        className="input w-40 py-1.5 text-right text-xs"
-                      />
-                      <span className="text-[11px] text-slate-400">docas, conferência, endereços</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
+            <div className="app-card__corpo" style={{ paddingTop: 16 }}>
+              <p className="ajuda">Os três limites valem ao mesmo tempo, e o menor deles é o gargalo. Sugestões já aprovadas e não faturadas <b>ocupam capacidade</b>, porque a doca e a frota já estão comprometidas com elas. O dashboard mostra a utilização e o que ficou barrado.</p>
             </div>
-
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" disabled={!capAtiva} checked={limitarRota} onChange={(e) => setLimitarRota(e.target.checked)} />
-                <span className="text-sm font-medium text-slate-800">Limitar também o transporte por rota (frota disponível)</span>
-              </label>
-              {limitarRota && rotas.length > 0 && (
-                <div className="mt-3 overflow-x-auto thin-scroll">
-                  <table className="min-w-full">
-                    <thead>
-                      <tr className="border-b border-slate-200">
-                        <th className="th">Rota</th>
-                        {params.destinos.map((d) => <th key={d} className="th text-right">→ CD {d}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {params.origens.map((o) => (
-                        <tr key={o} className="border-b border-slate-100">
-                          <td className="td font-semibold">CD {o} →</td>
-                          {params.destinos.map((d) => (
-                            <td key={d} className="td text-right">
-                              {o === d ? (
-                                <span className="text-slate-300">—</span>
-                              ) : (
-                                <input
-                                  type="number"
-                                  min="0"
-                                  placeholder="sem limite"
-                                  value={cap.porRota?.[`${o}>${d}`] ?? ""}
-                                  onChange={(e) => setLimite("porRota", `${o}>${d}`, e.target.value)}
-                                  className="input w-28 py-1 text-right text-xs"
-                                />
-                              )}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <p className="mt-3 text-[11px] text-slate-500">
-              Os três limites valem ao mesmo tempo — o menor deles é o gargalo. Sugestões já aprovadas e não faturadas
-              <b> ocupam capacidade</b>, porque a doca e a frota já estão comprometidas com elas. O dashboard mostra a
-              utilização e o que ficou barrado.
-            </p>
           </Secao>
-        </div>
 
-        {/* ---------------------- Histórico ------------------------ */}
-        {log.length > 0 && (
-          <div className="min-w-0 lg:col-span-3">
-            <Secao titulo="Histórico de importações" desc="Auditoria das bases carregadas nesta instância.">
-              <div className="overflow-x-auto thin-scroll">
-                <table className="min-w-full">
+          {/* ---------------------- Histórico ------------------------ */}
+          {log.length > 0 && (
+            <Secao flush titulo="Histórico de importações" desc="Auditoria das bases carregadas nesta instância">
+              <Rolagem>
+                <table className="pgm-tabela">
                   <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="th">Quando</th><th className="th">Quem</th><th className="th">Arquivos</th>
-                      <th className="th text-right">Base</th><th className="th text-right">Pedidos</th><th className="th">CDs</th>
-                    </tr>
+                    <tr><th>Quando</th><th>Quem</th><th>Arquivos</th><th className="pgm-num">Base</th><th className="pgm-num">Pedidos</th><th>CDs</th></tr>
                   </thead>
                   <tbody>
                     {log.slice(0, 8).map((l) => (
-                      <tr key={l.id} className="border-b border-slate-100">
-                        <td className="td">{new Date(l.em).toLocaleString("pt-BR")}</td>
-                        <td className="td">{l.por}</td>
-                        <td className="td max-w-xs truncate">{l.origem}</td>
-                        <td className="td num">{fmtInt(l.baseLinhas)}</td>
-                        <td className="td num">{fmtInt(l.pedidosLinhas)}</td>
-                        <td className="td">{l.cds.join(", ")}</td>
+                      <tr key={l.id}>
+                        <td>{new Date(l.em).toLocaleString("pt-BR")}</td>
+                        <td>{l.por}</td>
+                        <td className="prod" style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" }}>{l.origem}</td>
+                        <td className="pgm-num">{fmtInt(l.baseLinhas)}</td>
+                        <td className="pgm-num">{fmtInt(l.pedidosLinhas)}</td>
+                        <td>{l.cds.join(", ")}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </Rolagem>
             </Secao>
-          </div>
-        )}
-      </div>
+          )}
 
-      <div className="mt-5 flex justify-end">
-        <button onClick={rodar} disabled={rodando} className="btn-primary">
-          {rodando ? "Rodando…" : "▶ Rodar análise"}
-        </button>
+          <div className="barra-acao">
+            <p className="barra-acao__resumo">
+              <b>{podeRodar ? "Pronto para rodar:" : "Ainda falta:"}</b>{" "}
+              {podeRodar
+                ? `${params.origens.length} origem(ns) → ${params.destinos.length} destino(s), ${rotas.length} rota(s), ${modoPedidos ? "pedidos" : "saldo ideal"}${cobAtiva && params.coberturaMaxDestinoDias > 0 ? `, teto ${params.coberturaMaxDestinoDias} d` : ""}${capAtiva && temCapacidade ? `, capacidade em ${unidadeCap}` : ""}.`
+                : [!dataset.pronto && "importar a base", params.origens.length === 0 && "escolher as origens", params.destinos.length === 0 && "escolher os destinos"].filter(Boolean).join(", ") + "."}
+              {rotasSemAliquota.length > 0 && <> <b>{rotasSemAliquota.length} rota(s) sem alíquota.</b></>}
+            </p>
+            {rotasSemAliquota.length > 0 && <a href="#p5" className="pgm-botao pgm-botao--secundario">Informar alíquota</a>}
+            <Rodar />
+          </div>
+
+          <Fonte>
+            Fonte: {dataset.fonteBase || "base de CDs importada"}{dataBase && ` · posição de estoque de ${dataBase}`}{dataset.demo && " · base de demonstração (sintética)"}.
+          </Fonte>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
