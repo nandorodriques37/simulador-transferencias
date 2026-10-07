@@ -1,42 +1,40 @@
 import type { Config } from "tailwindcss";
 
+/**
+ * As cores vêm dos tokens do design system Pague Menos (variáveis CSS em
+ * app/globals.css). Os utilitários do Tailwind só apontam para elas, assim
+ * `bg-primaria` ou `text-ink-2` seguem o tema claro/escuro sozinhos.
+ */
 const config: Config = {
-  content: [
-    "./app/**/*.{ts,tsx}",
-    "./components/**/*.{ts,tsx}",
-  ],
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  darkMode: ["selector", '[data-theme="escuro"]'],
   theme: {
     extend: {
       colors: {
-        // Pague Menos — vermelho institucional (cor primária)
+        azul: "var(--azul)",
+        primaria: { DEFAULT: "var(--primaria)", hover: "var(--primaria-hover)" },
+        "texto-marca": "var(--texto-marca)",
+        "sobre-azul": "var(--sobre-azul)",
+        coral: { DEFAULT: "var(--coral)", texto: "var(--coral-texto)", tint: "var(--coral-tint)" },
+        ambar: { DEFAULT: "var(--ambar)", texto: "var(--ambar-texto)", tint: "var(--ambar-tint)" },
+        verde: { DEFAULT: "var(--verde)", tint: "var(--verde-tint)" },
+        ink: { DEFAULT: "var(--ink)", 2: "var(--ink-2)", 3: "var(--ink-3)" },
+        papel: { DEFAULT: "var(--papel)", 2: "var(--papel-2)" },
+        fundo: "var(--fundo)",
+        linha: { DEFAULT: "var(--linha)", hover: "var(--linha-hover)" },
+        // Nomes antigos, mantidos até o Lote B4 para as páginas ainda não migradas.
         brand: {
-          50: "#fff1f3",
-          100: "#ffe0e5",
-          200: "#ffc2cc",
-          300: "#ff94a5",
-          400: "#ff5872",
-          500: "#ff2342",
-          600: "#ed0a2e",
-          700: "#c70425",
-          800: "#a30823",
-          900: "#870d23",
-        },
-        // Pague Menos — azul institucional (cor secundária / wordmark)
-        azul: {
-          50: "#ededff",
-          100: "#dcdcff",
-          200: "#bfbfff",
-          300: "#9494ff",
-          400: "#5a5aff",
-          500: "#2323e0",
-          600: "#0000be",
-          700: "#00009e",
-          800: "#050585",
-          900: "#0a0a6b",
+          50: "var(--coral-tint)",
+          100: "var(--coral-tint)",
+          500: "var(--coral)",
+          600: "var(--coral-texto)",
+          700: "var(--coral-texto)",
         },
       },
+      borderRadius: { pgm: "var(--raio)", slide: "var(--raio-slide)" },
+      boxShadow: { 1: "var(--sombra-1)", 2: "var(--sombra-2)" },
       fontFamily: {
-        sans: ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "Arial", "sans-serif"],
+        sans: ['"Montserrat"', '"Segoe UI"', "system-ui", "sans-serif"],
       },
     },
   },
