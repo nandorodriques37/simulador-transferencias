@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CHAVE_TEMA as CHAVE } from "./tema-script";
 
 export type Tema = "claro" | "escuro" | "sistema";
-const CHAVE = "pgm-tema";
 
 /** Lê a preferência salva; "sistema" quando não há nada guardado. */
 function lerTema(): Tema {
@@ -21,12 +21,6 @@ function aplicar(t: Tema) {
   document.documentElement.dataset.theme = resolver(t);
 }
 
-/**
- * Script que roda antes da hidratação: aplica o tema salvo ao <html> para a
- * página não piscar em claro antes de virar escuro. Mesma lógica de `aplicar`,
- * escrita sem dependências porque vai inline no layout.
- */
-export const SCRIPT_TEMA = `(function(){try{var t=localStorage.getItem("${CHAVE}");var e=t==="escuro"||(t!=="claro"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=e?"escuro":"claro";}catch(err){document.documentElement.dataset.theme="claro";}})();`;
 
 const OPCOES: { valor: Tema; rotulo: string }[] = [
   { valor: "claro", rotulo: "Claro" },

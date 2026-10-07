@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Casca } from "@/components/Nav";
-import { SCRIPT_TEMA } from "@/components/Tema";
+import { SCRIPT_TEMA } from "@/components/tema-script";
 
 export const metadata: Metadata = {
   title: "Pague Menos — Transferências entre CDs",
