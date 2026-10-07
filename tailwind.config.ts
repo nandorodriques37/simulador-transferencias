@@ -22,14 +22,6 @@ const config: Config = {
         papel: { DEFAULT: "var(--papel)", 2: "var(--papel-2)" },
         fundo: "var(--fundo)",
         linha: { DEFAULT: "var(--linha)", hover: "var(--linha-hover)" },
-        // Nomes antigos, mantidos até o Lote B4 para as páginas ainda não migradas.
-        brand: {
-          50: "var(--coral-tint)",
-          100: "var(--coral-tint)",
-          500: "var(--coral)",
-          600: "var(--coral-texto)",
-          700: "var(--coral-texto)",
-        },
       },
       borderRadius: { pgm: "var(--raio)", slide: "var(--raio-slide)" },
       boxShadow: { 1: "var(--sombra-1)", 2: "var(--sombra-2)" },

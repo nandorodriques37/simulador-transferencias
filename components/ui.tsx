@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { Icone, type NomeIcone } from "@/components/icones";
 
 /** Fecha o que está aberto com Escape. Compartilhado pelo modal e pelo menu. */
@@ -406,6 +406,11 @@ export function Modal({
   largura?: number | string;
 }) {
   useEscape(aberto, onFechar);
+  // Ao abrir, o foco vai para o modal: o Tab seguinte percorre o diálogo, não a página atrás.
+  const fecharRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (aberto) fecharRef.current?.focus();
+  }, [aberto]);
 
   if (!aberto) return null;
   const w = typeof largura === "number" ? largura : 720;
@@ -417,7 +422,7 @@ export function Modal({
             <h2 id="modal-titulo">{titulo}</h2>
             {sub && <p>{sub}</p>}
           </div>
-          <button type="button" onClick={onFechar} className="modal__x" aria-label="Fechar">
+          <button type="button" ref={fecharRef} onClick={onFechar} className="modal__x" aria-label="Fechar">
             <Icone nome="fechar" espessura={2.2} />
           </button>
         </div>

@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Alert, Badge, ErroCarga, PageHeader, Revalidando, Spinner } from "@/components/ui";
+import { Alert, Badge, Campo, ErroCarga, Estado, Fonte, Modal, PageHeader, Pill, Ressalvas, Revalidando, Rolagem, Rota, Spinner, Status } from "@/components/ui";
 import { fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes } from "@/lib/format";
 import { useApi, useDebounce } from "@/lib/useApi";
 
@@ -40,7 +40,7 @@ const PADROES: Record<string, string> = { ...FILTROS_INICIAIS, sort: "valorTotal
 export default function PlanoPage() {
   // `useSearchParams` exige Suspense no Next 14 (a página é renderizada no cliente).
   return (
-    <Suspense fallback={<div className="pt-10"><Spinner label="Carregando plano…" /></div>}>
+    <Suspense fallback={<Spinner label="Abrindo o plano…" />}>
       <Plano />
     </Suspense>
   );
@@ -72,6 +72,8 @@ function Plano() {
   const [msg, setMsg] = useState<{ tom: "good" | "erro"; texto: string } | null>(null);
   const [aprovando, setAprovando] = useState(false);
   const [recalculando, setRecalculando] = useState(false);
+  // Confirmação antes de mandar linhas para a carteira: "filtro" (todas) ou "selecao".
+  const [confirma, setConfirma] = useState<"filtro" | "selecao" | null>(null);
 
   const aplicar = (patch: Record<string, string>, resetPagina = true) => {
     const p = new URLSearchParams(url.toString());
@@ -127,7 +129,7 @@ function Plano() {
     }
   };
 
-  if (api.carregando) return <div className="pt-10"><Spinner label="Carregando plano…" /></div>;
+  if (api.carregando) return <Spinner label="Abrindo o plano…" />;
   if (api.erro && !data) return <ErroCarga erro={api.erro} onTentar={api.recarregar} />;
   if (!data) return null;
 
@@ -135,35 +137,38 @@ function Plano() {
   // resultado salvo sobrevive e o plano é reconstruído em um clique.
   if (data.precisaRecalcular) {
     return (
-      <div>
-        <PageHeader title="Plano de transferência" subtitle={`Análise ${data.analiseId} · ${data.label ?? ""}`} />
-        <div className="card p-8 text-center">
-          <p className="text-sm text-slate-600">
-            O plano desta análise não está disponível neste ambiente — provavelmente ele foi gerado antes de o
-            armazenamento ser configurado.
-          </p>
-          <p className="mx-auto mt-1 max-w-lg text-xs text-slate-400">
-            Recalcular usa a mesma base e os mesmos parâmetros: leva alguns segundos e devolve o plano completo para
-            filtrar e aprovar.
-          </p>
-          <button onClick={recalcular} disabled={recalculando} className="btn-primary mt-4 inline-flex">
-            {recalculando ? "Recalculando…" : "↻ Recalcular o plano"}
-          </button>
-          {msg && <div className="mt-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
-        </div>
-      </div>
+      <>
+        <PageHeader title="As linhas do plano precisam ser recalculadas" subtitle={`Análise ${data.analiseId}${data.label ? ` · ${data.label}` : ""}`} />
+        {msg && <Alert tom={msg.tom} titulo={msg.tom === "erro" ? "Falha" : "Pronto"}>{msg.texto}</Alert>}
+        <Estado
+          tom="atencao"
+          icone="recarregar"
+          rotulo="Plano"
+          titulo="O resultado foi guardado, mas as linhas por rota × SKU não"
+          texto="Recalcular usa a mesma base e os mesmos parâmetros: leva alguns segundos e devolve o plano completo para filtrar e aprovar."
+          acoes={
+            <>
+              <button onClick={recalcular} disabled={recalculando} className="pgm-botao" type="button">{recalculando ? "Recalculando…" : "Recalcular o plano"}</button>
+              <Link href="/" className="pgm-botao pgm-botao--secundario">Ver o dashboard</Link>
+            </>
+          }
+        />
+      </>
     );
   }
 
   if (data.semAnalise || data.erro) {
     return (
-      <div>
-        <PageHeader title="Plano de transferência" />
-        <div className="card p-8 text-center">
-          <p className="text-sm text-slate-600">Rode uma análise para gerar o plano.</p>
-          <Link href="/analise" className="btn-primary mt-4 inline-flex">Ir para Nova análise</Link>
-        </div>
-      </div>
+      <>
+        <PageHeader title="Nenhuma análise rodada ainda" subtitle="O plano lista uma linha por rota (origem → destino) × SKU da última análise." />
+        <Estado
+          icone="analise"
+          rotulo="Plano"
+          titulo="Rode uma análise para gerar o plano"
+          texto="Defina origens, destinos e parâmetros em Nova análise. O plano aparece aqui assim que a análise terminar."
+          acoes={<Link href="/analise" className="pgm-botao">Nova análise</Link>}
+        />
+      </>
     );
   }
 
@@ -211,180 +216,236 @@ function Plano() {
 
   // Cabeçalho ordenável como <button>: alcançável por teclado e anunciado pelo
   // leitor de tela — o <th onClick> anterior não era nem uma coisa nem outra.
-  const th = (campo: string, rotulo: string, extra = "") => {
+  const th = (campo: string, rotulo: string, numerico = false) => {
     const ativo = sort.campo === campo;
     return (
-      <th scope="col" className={`thc ${extra}`} aria-sort={ativo ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}>
-        <button
-          type="button"
-          onClick={() => ordenar(campo)}
-          className="inline-flex items-center gap-0.5 uppercase tracking-wide hover:text-slate-800"
-          title={`Ordenar por ${rotulo}`}
-        >
+      <th scope="col" className={numerico ? "pgm-num" : undefined} aria-sort={ativo ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}>
+        <button type="button" onClick={() => ordenar(campo)} className="ordem" aria-sort={ativo ? (sort.dir === "desc" ? "descending" : "ascending") : undefined} title={`Ordenar por ${rotulo}`}>
           {rotulo}
-          <span aria-hidden>{ativo ? (sort.dir === "desc" ? " ↓" : " ↑") : ""}</span>
         </button>
       </th>
     );
   };
 
+  const pctImediata = totaisFiltro.valor > 0 ? totaisFiltro.imediata / totaisFiltro.valor : 0;
+  const filtrosAtivos = Object.entries(filtros).filter(([k, v]) => v && v !== FILTROS_INICIAIS[k]).length;
+  const nColunas = 13 + (modoPedidos ? meses.length - 1 : 0);
+  const confirmarAprovacao = (tudo: boolean) => setConfirma(tudo ? "filtro" : "selecao");
+
   return (
-    <div>
+    <>
       <PageHeader
-        title="Plano de transferência"
-        subtitle={
-          <>
-            Análise <b>{data.analiseId}</b> · uma linha por rota (origem → destino) × SKU ·{" "}
-            {modoPedidos ? "abatendo pedidos" : "atendendo o saldo ideal"}
-          </>
-        }
+        title={<>{fmtInt(data.total)} linhas somam {fmtRsCompacto(totaisFiltro.valor)}; <em>{fmtPct(pctImediata, 0)} saem hoje</em></>}
+        subtitle={<>Análise {data.analiseId} · uma linha por rota (origem → destino) × SKU · {modoPedidos ? "abatendo pedidos" : "atendendo o saldo ideal"}{filtrosAtivos > 0 && ` · ${filtrosAtivos} filtro(s) ativo(s)`}</>}
         right={
-          <div className="flex gap-2">
-            <a href={`/api/plano/export?${qs}&format=csv`} className="btn-ghost">CSV</a>
-            <a href={`/api/plano/export?${qs}&format=xlsx`} className="btn-ghost">Excel</a>
-          </div>
+          <>
+            <Revalidando ativo={api.revalidando} />
+            <a href={`/api/plano/export?${qs}&format=csv`} className="pgm-botao pgm-botao--secundario">Exportar CSV</a>
+            <a href={`/api/plano/export?${qs}&format=xlsx`} className="pgm-botao pgm-botao--secundario">Exportar Excel</a>
+          </>
         }
       />
 
-      {msg && <div className="mb-3"><Alert tom={msg.tom}>{msg.texto}</Alert></div>}
+      {msg && <Alert tom={msg.tom} titulo={msg.tom === "erro" ? "Atenção" : "Pronto"}>{msg.texto}</Alert>}
 
       {/* ------------------------------ Filtros ------------------------------ */}
-      <div className="card mb-3 p-3">
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <div className="label mb-0.5">Buscar</div>
-            <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="produto ou código" className="input w-48 py-1.5 text-xs" />
-          </div>
-          <div>
-            <div className="label mb-0.5">Origem</div>
-            <select value={filtros.origem} onChange={(e) => setF("origem", e.target.value)} className="input py-1.5 text-xs">
+      <section className="app-card filtros-card" aria-label="Filtros do plano">
+        <div className="pgm-filtros">
+          <Campo rotulo="Buscar" htmlFor="f-busca" style={{ minWidth: 220 }}>
+            <input id="f-busca" type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Produto ou código" className="pgm-campo__controle" />
+          </Campo>
+          <Campo rotulo="Origem" htmlFor="f-origem">
+            <select id="f-origem" value={filtros.origem} onChange={(e) => setF("origem", e.target.value)} className="pgm-campo__controle">
               <option value="">Todas</option>
               {facets.origens.map((c) => <option key={c} value={c}>CD {c}</option>)}
             </select>
-          </div>
-          <div>
-            <div className="label mb-0.5">Destino</div>
-            <select value={filtros.destino} onChange={(e) => setF("destino", e.target.value)} className="input py-1.5 text-xs">
+          </Campo>
+          <Campo rotulo="Destino" htmlFor="f-destino">
+            <select id="f-destino" value={filtros.destino} onChange={(e) => setF("destino", e.target.value)} className="pgm-campo__controle">
               <option value="">Todos</option>
               {facets.destinos.map((c) => <option key={c} value={c}>CD {c}</option>)}
             </select>
-          </div>
-          <div>
-            <div className="label mb-0.5">Categoria</div>
-            <select value={filtros.categoria} onChange={(e) => setF("categoria", e.target.value)} className="input py-1.5 text-xs">
+          </Campo>
+          <Campo rotulo="Categoria" htmlFor="f-cat">
+            <select id="f-cat" value={filtros.categoria} onChange={(e) => setF("categoria", e.target.value)} className="pgm-campo__controle">
               <option value="">Todas</option>
               {facets.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-          </div>
-          <div>
-            <div className="label mb-0.5">Comprador</div>
-            <select value={filtros.comprador} onChange={(e) => setF("comprador", e.target.value)} className="input py-1.5 text-xs">
+          </Campo>
+          <Campo rotulo="Comprador" htmlFor="f-comp">
+            <select id="f-comp" value={filtros.comprador} onChange={(e) => setF("comprador", e.target.value)} className="pgm-campo__controle">
               <option value="">Todos</option>
               {facets.compradores.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-          </div>
-          <div>
-            <div className="label mb-0.5">Cobertura na origem</div>
-            <select value={filtros.cobertura} onChange={(e) => setF("cobertura", e.target.value)} className="input py-1.5 text-xs">
+          </Campo>
+          <Campo rotulo="Cobertura na origem" htmlFor="f-cob">
+            <select id="f-cob" value={filtros.cobertura} onChange={(e) => setF("cobertura", e.target.value)} className="pgm-campo__controle">
               <option value="total">Total</option>
               <option value="acima_limite">Só estoque parado</option>
             </select>
-          </div>
-          <label className="flex items-center gap-1.5 pb-1.5 text-xs text-slate-600">
+          </Campo>
+          <label className="marca" style={{ paddingBottom: 10 }}>
             <input type="checkbox" checked={filtros.soImediata === "true"} onChange={(e) => setF("soImediata", String(e.target.checked))} />
             Só com saída imediata
           </label>
           <button
+            type="button"
             onClick={() => { setBusca(""); router.replace("/plano", { scroll: false }); setSel(new Set()); }}
-            className="btn-ghost py-1.5 text-xs"
+            className="pgm-botao pgm-botao--secundario"
+            disabled={filtrosAtivos === 0 && !busca}
           >
-            Limpar
+            Limpar filtros
           </button>
-          <div className="pb-1.5"><Revalidando ativo={api.revalidando} /></div>
         </div>
 
-        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
-          <div className="flex flex-wrap gap-1.5">
-            <Badge>{fmtInt(data.total)} linhas</Badge>
-            <Badge tom="brand">{fmtRs(totaisFiltro.valor)}</Badge>
+        <div className="filtros-acao">
+          <div className="grupo" aria-label="Totais do filtro atual">
+            <Badge tom="azul">{fmtInt(data.total)} linha(s) no filtro</Badge>
+            <Badge>{fmtRsCompacto(totaisFiltro.valor)}</Badge>
             <Badge tom="good">Imediata {fmtRsCompacto(totaisFiltro.imediata)}</Badge>
             <Badge tom="warn">Fiscal {fmtRsCompacto(totaisFiltro.fiscal)}</Badge>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => aprovar(false)} disabled={sel.size === 0 || aprovando} className="btn-secondary py-1.5 text-xs">
+          <div className="grupo">
+            <button type="button" onClick={() => confirmarAprovacao(false)} disabled={sel.size === 0 || aprovando} className="pgm-botao pgm-botao--secundario">
               Aprovar selecionadas ({sel.size})
             </button>
-            <button onClick={() => aprovar(true)} disabled={aprovando || data.total === 0} className="btn-primary py-1.5 text-xs">
+            <button type="button" onClick={() => confirmarAprovacao(true)} disabled={aprovando || data.total === 0} className="pgm-botao">
               Aprovar todas do filtro ({fmtInt(data.total)})
             </button>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* ------------------------------- Tabela ------------------------------ */}
-      <div className="card overflow-x-auto thin-scroll">
-        <table className="min-w-full">
-          <caption className="sr-only">
-            Plano de transferência: uma linha por rota e SKU, {fmtInt(data.total)} linhas no filtro atual.
-          </caption>
-          <thead className="sticky top-0 bg-white shadow-[0_1px_0_0_#e2e8f0]">
-            <tr>
-              <th scope="col" className="thc w-8">
-                <input type="checkbox" checked={itens.length > 0 && itens.every((l) => sel.has(chave(l)))} onChange={alternarTodas} />
-              </th>
-              {th("rota", "Rota")}
-              {th("codigoProduto", "Código")}
-              {th("produto", "Produto")}
-              <th scope="col" className="thc">Categoria</th>
-              {modoPedidos
-                ? meses.map((m) => <th key={m} scope="col" className="thc text-right">Transf. {rotuloMes(m)}</th>)
-                : <th scope="col" className="thc text-right">Necessidade</th>}
-              {th("transfTotal", "Qtd total", "text-right")}
-              <th scope="col" className="thc text-right">Cx</th>
-              {th("qtdImediataArredondada", "Imediata (un)", "text-right")}
-              {th("valorTotal", "Valor", "text-right")}
-              {th("impactoFiscal", "Fiscal", "text-right")}
-              {th("coberturaDias", "Cob. origem", "text-right")}
-              <th scope="col" className="thc">Carteira</th>
-            </tr>
-          </thead>
-          <tbody>
-            {itens.map((l) => {
-              const k = chave(l);
-              return (
-                <tr key={k} className={`border-b border-slate-100 ${sel.has(k) ? "bg-brand-50/60" : ""}`}>
-                  <td className="tdc"><input type="checkbox" checked={sel.has(k)} onChange={() => alternar(k)} /></td>
-                  <td className="tdc font-medium">CD{l.cdOrigem} → CD{l.cdDestino}</td>
-                  <td className="tdc">{l.codigoProduto}</td>
-                  <td className="tdc max-w-[220px] truncate" title={l.produto}>{l.produto}</td>
-                  <td className="tdc max-w-[130px] truncate text-slate-500" title={l.categoriaN1}>{l.categoriaN1}</td>
-                  {modoPedidos
-                    ? l.transfMes.map((t, i) => <td key={i} className="tdc num">{fmtInt(t)}</td>)
-                    : <td className="tdc num text-slate-500">{fmtInt(l.demandaSaldo)}</td>}
-                  <td className="tdc num font-semibold">{fmtInt(l.transfTotal)}</td>
-                  <td className="tdc num text-slate-500">{fmtInt(l.caixas)}</td>
-                  <td className="tdc num">{fmtInt(l.qtdImediataArredondada)}</td>
-                  <td className="tdc num">{fmtRs(l.valorTotal)}</td>
-                  <td className="tdc num text-slate-500">{fmtRs(l.impactoFiscal)}</td>
-                  <td className="tdc num text-slate-500">{l.coberturaDias >= 9999 ? "s/ giro" : fmtInt(l.coberturaDias)}</td>
-                  <td className="tdc">{l.naCarteira ? <Badge tom="good">aprovada</Badge> : <span className="text-slate-300">—</span>}</td>
+      <section className="app-card app-card--flush" aria-label="Linhas do plano">
+        <Rolagem>
+          <table className="pgm-tabela tabela-fixa">
+            <caption className="sr-only">
+              Plano de transferência: uma linha por rota e SKU, {fmtInt(data.total)} linhas no filtro atual.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col" style={{ width: 44 }}>
+                  <input type="checkbox" checked={itens.length > 0 && itens.every((l) => sel.has(chave(l)))} onChange={alternarTodas} aria-label="Selecionar todas as linhas da página" />
+                </th>
+                {th("rota", "Rota")}
+                {th("codigoProduto", "Código")}
+                {th("produto", "Produto")}
+                <th scope="col">Categoria</th>
+                {modoPedidos
+                  ? meses.map((m) => <th key={m} scope="col" className="pgm-num">Transf. {rotuloMes(m)}</th>)
+                  : <th scope="col" className="pgm-num">Necessidade</th>}
+                {th("transfTotal", "Qtd total", true)}
+                <th scope="col" className="pgm-num">Cx</th>
+                {th("qtdImediataArredondada", "Imediata (un)", true)}
+                {th("valorTotal", "Valor", true)}
+                {th("impactoFiscal", "Fiscal", true)}
+                {th("coberturaDias", "Cob. origem (d)", true)}
+                <th scope="col">Carteira</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((l) => {
+                const k = chave(l);
+                return (
+                  <tr key={k} className={sel.has(k) ? "sel" : undefined}>
+                    <td><input type="checkbox" checked={sel.has(k)} onChange={() => alternar(k)} aria-label={`Selecionar ${l.produto}`} /></td>
+                    <td><Rota origem={l.cdOrigem} destino={l.cdDestino} /></td>
+                    <td>{l.codigoProduto}</td>
+                    <td className="prod" title={l.produto}>{l.produto}</td>
+                    <td className="cat prod" style={{ maxWidth: 160 }} title={l.categoriaN1}>{l.categoriaN1}</td>
+                    {modoPedidos
+                      ? l.transfMes.map((t, i) => <td key={i} className="pgm-num">{fmtInt(t)}</td>)
+                      : <td className="pgm-num">{fmtInt(l.demandaSaldo)}</td>}
+                    <td className="pgm-num"><b>{fmtInt(l.transfTotal)}</b></td>
+                    <td className="pgm-num">{fmtInt(l.caixas)}</td>
+                    <td className="pgm-num">{fmtInt(l.qtdImediataArredondada)}</td>
+                    <td className="pgm-num">{fmtRs(l.valorTotal)}</td>
+                    <td className="pgm-num">{l.aliquota > 0 ? fmtRs(l.impactoFiscal) : <Pill tom="ambar" pequena>sem alíquota</Pill>}</td>
+                    <td className="pgm-num">{l.coberturaDias >= 9999 ? "s/ giro" : fmtInt(l.coberturaDias)}</td>
+                    <td>{l.naCarteira ? <Status tom="aberta">Aprovada</Status> : <span style={{ color: "var(--ink-3)" }}>sem sugestão</span>}</td>
+                  </tr>
+                );
+              })}
+              {itens.length === 0 && (
+                <tr>
+                  <td colSpan={nColunas} style={{ padding: 0, background: "var(--papel)" }}>
+                    <Estado
+                      icone="busca"
+                      rotulo="Filtro sem resultado"
+                      titulo="Nenhuma linha com esses filtros"
+                      texto={`${busca ? `"${busca}"` : "A combinação atual"} não encontra nada entre as linhas do plano.`}
+                      acoes={<button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => { setBusca(""); router.replace("/plano", { scroll: false }); }}>Limpar filtros</button>}
+                    />
+                  </td>
                 </tr>
-              );
-            })}
-            {itens.length === 0 && (
-              <tr><td colSpan={14} className="td text-center text-slate-400">Nenhuma linha com os filtros atuais.</td></tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </Rolagem>
+        <div className="tabela-rodape">
+          <span>Página {data.page} de {data.totalPaginas} · {fmtInt(data.total)} linhas · a saída imediata cobre {fmtPct(pctImediata, 0)} do valor do filtro</span>
+          <div className="pag">
+            <button type="button" onClick={() => irPara(page - 1)} disabled={data.page <= 1} className="pgm-botao pgm-botao--secundario">Anterior</button>
+            <button type="button" onClick={() => irPara(page + 1)} disabled={data.page >= data.totalPaginas} className="pgm-botao pgm-botao--secundario">Próxima</button>
+          </div>
+        </div>
+      </section>
+
+      <div>
+        <Ressalvas
+          itens={[
+            '"s/ giro": SKU sem venda média no destino, ignora teto e piso',
+            "Valor e fiscal são recalculados na leitura",
+            filtros.cobertura === "acima_limite" && "Visão filtrada: só SKUs com estoque parado na origem",
+          ]}
+        />
+        <Fonte>Fonte: plano da análise {data.analiseId}{data.criadoEm && ` · rodada em ${new Date(data.criadoEm).toLocaleDateString("pt-BR")}`} · estoque objetivo, venda média de 3 meses e pendente da própria base.</Fonte>
       </div>
 
-      <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-        <div>Página {data.page} de {data.totalPaginas} · {fmtInt(data.total)} linhas · imediata cobre {fmtPct(totaisFiltro.valor > 0 ? totaisFiltro.imediata / totaisFiltro.valor : 0, 0)} do valor</div>
-        <div className="flex gap-2">
-          <button onClick={() => irPara(page - 1)} disabled={data.page <= 1} className="btn-ghost py-1 text-xs">Anterior</button>
-          <button onClick={() => irPara(page + 1)} disabled={data.page >= data.totalPaginas} className="btn-ghost py-1 text-xs">Próxima</button>
-        </div>
-      </div>
-    </div>
+      {/* ------------------------ Confirmação de aprovação ----------------------- */}
+      <Modal
+        aberto={confirma !== null}
+        titulo={confirma === "filtro" ? `Aprovar ${fmtInt(data.total)} linha(s) do filtro?` : `Aprovar ${sel.size} linha(s) selecionada(s)?`}
+        sub="Elas viram sugestões em carteira e passam a descontar o excesso da origem e a entrar como trânsito no destino na próxima análise."
+        onFechar={() => setConfirma(null)}
+        largura={520}
+        rodape={
+          <>
+            <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => setConfirma(null)}>Voltar</button>
+            <button
+              type="button"
+              className="pgm-botao"
+              disabled={aprovando}
+              onClick={async () => {
+                const tudo = confirma === "filtro";
+                setConfirma(null);
+                await aprovar(tudo);
+              }}
+            >
+              {aprovando ? "Aprovando…" : confirma === "filtro" ? `Aprovar ${fmtInt(data.total)} linhas` : `Aprovar ${sel.size} linhas`}
+            </button>
+          </>
+        }
+      >
+        {confirma === "filtro" ? (
+          <div className="resumo-previa">
+            <div><b>{fmtRsCompacto(totaisFiltro.valor)}</b><span>valor aprovado</span></div>
+            <div><b>{fmtRsCompacto(totaisFiltro.imediata)}</b><span>com saída imediata</span></div>
+            <div><b>{fmtInt(totaisFiltro.qtd)}</b><span>unidades</span></div>
+          </div>
+        ) : (
+          <div className="resumo-previa" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div><b>{fmtRsCompacto(itens.filter((l) => sel.has(chave(l))).reduce((a, l) => a + l.valorTotal, 0))}</b><span>valor aprovado</span></div>
+            <div><b>{fmtInt(itens.filter((l) => sel.has(chave(l))).reduce((a, l) => a + l.transfTotal, 0))}</b><span>unidades</span></div>
+          </div>
+        )}
+        {itens.some((l) => l.naCarteira && (confirma === "filtro" || sel.has(chave(l)))) && (
+          <Alert tom="info" titulo="Linhas já aprovadas">
+            Parte destas linhas já está na carteira. O app grava só a diferença, ou ignora a linha, e avisa o que fez.
+          </Alert>
+        )}
+      </Modal>
+    </>
   );
 }

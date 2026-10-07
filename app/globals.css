@@ -82,29 +82,6 @@ body, body * { box-sizing: border-box; }
   }
 }
 
-/* ---------- Classes antigas (saem no Lote B4, quando nenhuma página usar) ---------- */
-@layer components {
-  .card { @apply rounded-xl border shadow-sm; background: var(--papel); border-color: var(--linha); }
-  .btn { @apply inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors; }
-  .btn-primary { @apply btn disabled:opacity-50; background: var(--primaria); color: var(--sobre-azul); }
-  .btn-primary:hover { background: var(--primaria-hover); }
-  .btn-secondary { @apply btn disabled:opacity-50; background: var(--papel); color: var(--texto-marca); border: 1.5px solid var(--texto-marca); }
-  .btn-ghost { @apply btn disabled:opacity-50; background: var(--papel-2); color: var(--ink); border: 1px solid var(--linha); }
-  .btn-ghost:hover { background: var(--linha-hover); }
-  .input { @apply rounded-lg px-3 py-2 text-sm outline-none; background: var(--papel); color: var(--ink); border: 1.5px solid var(--cinza-serie); }
-  .input:focus { border-color: var(--texto-marca); }
-  .label { @apply text-xs font-semibold uppercase tracking-wide; color: var(--ink-2); }
-  .th { @apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap; color: var(--ink-2); }
-  .td { @apply px-3 py-2 text-sm whitespace-nowrap; color: var(--ink); }
-  .gh { @apply px-2 py-0.5 text-center text-xs font-semibold uppercase tracking-wider whitespace-nowrap; color: var(--ink-3); }
-  .thc { @apply px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap; color: var(--ink-2); }
-  .tdc { @apply px-2 py-1 text-xs leading-4 whitespace-nowrap; color: var(--ink); }
-  .num { @apply text-right tabular-nums; }
-  .grp { border-left: 1px solid var(--linha); }
-  .matgh { @apply px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide whitespace-nowrap; color: var(--ink-3); }
-  .math { @apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide whitespace-nowrap; color: var(--ink-2); }
-  .matd { @apply px-3 py-2 text-sm whitespace-nowrap; color: var(--ink); }
-}
 .thin-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
 .thin-scroll::-webkit-scrollbar-thumb { background: var(--cinza-serie); border-radius: 6px; }
 .thin-scroll::-webkit-scrollbar-track { background: transparent; }
