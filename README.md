@@ -280,6 +280,16 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 4. **Carteira** — sugestões em aberto e faturadas, cancelamento, **modal de
    importação do faturamento** (com prévia) e geração da **ordem de
    transferência** para ERP/WMS com o saldo em aberto.
+5. **Acompanhamento** — o que foi aprovado virou NF, e em quanto tempo:
+   - **aprovado × faturado** por rota, por CD de origem e por CD de destino, em
+     R$ ou unidades: `aprovado = faturado + em aberto + cancelado`, e o
+     atendimento é `faturado ÷ (aprovado − cancelado)`;
+   - **tempo da aprovação até a NF**: mediana, média e P90, com o volume em
+     faixas (até 7, 8–15, 16–30, mais de 30 dias). Cada NF pesa pela quantidade
+     faturada — a mediana diz "metade do volume faturou em até N dias";
+   - **saldo em aberto por idade**, com alerta para o que passou de 30 dias.
+
+   O período (30, 90, 180 dias ou tudo) filtra pela data de aprovação.
 
 ---
 
@@ -399,8 +409,10 @@ app/                   Telas + rotas de API
   analise/             Nova análise (bases, sequências, parâmetros)
   plano/               Plano de transferência + aprovação
   carteira/            Sugestões aprovadas + faturamento + ordem ERP
+  acompanhamento/      Aprovado × faturado e prazo até a NF
   api/                 status · cds · params · import · importlog · analise ·
-                       dashboard · plano[/export] · carteira[/ordem] · faturamento
+                       dashboard · plano[/export] · carteira[/ordem] · faturamento ·
+                       acompanhamento
 lib/engine/            Motor de rede (puro) + tipos + testes
 lib/data/              Esquemas, parsing, validação, leitura de planilha, seed
 lib/query/             Filtro/paginação/agregação server-side

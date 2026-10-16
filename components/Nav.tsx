@@ -21,6 +21,7 @@ const ITENS: Item[] = [
   { href: "/analise", label: "Nova análise", curto: "Análise", icone: "analise", grupo: "Análise" },
   { href: "/plano", label: "Plano de transferência", curto: "Plano", icone: "plano", grupo: "Execução" },
   { href: "/carteira", label: "Carteira", curto: "Carteira", icone: "carteira", grupo: "Execução" },
+  { href: "/acompanhamento", label: "Acompanhamento", curto: "Acompanhar", icone: "acompanhamento", grupo: "Execução" },
 ];
 
 /** O que a casca lê de /api/status para o topo e o contador da Carteira. */

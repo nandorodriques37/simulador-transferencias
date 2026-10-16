@@ -577,6 +577,29 @@ export const carteira = {
     return carregarAbertas(f);
   },
 
+  /**
+   * Todas as sugestões aprovadas a partir de `desde` (qualquer status), sem
+   * teto — base do acompanhamento aprovado × faturado.
+   */
+  async listarPeriodo(f: { desde?: string | null; cdOrigem?: number | null; cdDestino?: number | null } = {}): Promise<Sugestao[]> {
+    const pool = getPool();
+    if (pool) {
+      await ensureSchema();
+      const { rows } = await pool.query(
+        `SELECT ${COLUNAS_CALCULO} FROM sugestao_transferencia
+         WHERE ($1::timestamptz IS NULL OR criado_em >= $1)
+           AND ($2::int IS NULL OR cd_origem = $2)
+           AND ($3::int IS NULL OR cd_destino = $3)`,
+        [f.desde ?? null, f.cdOrigem ?? null, f.cdDestino ?? null],
+      );
+      return rows.map(daLinha);
+    }
+    return Array.from(mem().values())
+      .filter((s) => !f.desde || s.criadoEm >= f.desde)
+      .filter((s) => f.cdOrigem == null || s.cdOrigem === f.cdOrigem)
+      .filter((s) => f.cdDestino == null || s.cdDestino === f.cdDestino);
+  },
+
   /** Rota + produto (`"10>1|123"`) já levados à carteira por uma análise. */
   async chavesDaAnalise(analiseId: string): Promise<Set<string>> {
     const pool = getPool();
