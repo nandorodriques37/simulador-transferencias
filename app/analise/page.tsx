@@ -6,6 +6,7 @@ import { Alert, Badge, Campo, Chave, ErroCarga, Fonte, PageHeader, Progress, Rol
 import { Icone } from "@/components/icones";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
+import { enviarDireto, esquecerEnvio } from "@/lib/uploadCliente";
 
 type ModoDemanda = "saldo_ideal" | "pedidos";
 
@@ -164,17 +165,11 @@ export default function NovaAnalise() {
     if (uploadDireto) {
       // Arquivo grande não cabe no corpo de uma função serverless (4,5 MB): vai
       // direto do navegador para o armazenamento e a importação recebe a URL.
-      const { upload } = await import("@vercel/blob/client");
-      const enviar = async (f: File, prefixo: string) => {
-        const blob = await upload(`upload/${prefixo}-${Date.now()}-${f.name}`, f, {
-          access: "public",
-          handleUploadUrl: "/api/blob/upload",
-          onUploadProgress: ({ percentage }) => setProgresso(Math.round(percentage * 0.7)),
-        });
-        return blob.url;
-      };
-      const baseUrl = baseFile ? await enviar(baseFile, "base") : undefined;
-      const pedidosUrl = pedFile ? await enviar(pedFile, "pedidos") : undefined;
+      // Base e pedidos dividem a barra: cada um ocupa sua metade dos 70%.
+      const peso = baseFile && pedFile ? 0.35 : 0.7;
+      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso))) : undefined;
+      const inicio = baseFile ? Math.round(100 * peso) : 0;
+      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso))) : undefined;
       setProgresso(75);
       r = await fetch("/api/import", {
         method: "POST",
@@ -196,6 +191,7 @@ export default function NovaAnalise() {
     setRelatorio(d.relatorio ?? { baseLinhas: 0, pedidosLinhas: 0, cdsBase: [], achados: [{ nivel: "erro", codigo: "x", mensagem: d.erro, qtd: 0 }], ok: false });
     if (!dryRun && r.ok) {
       setMsg({ tom: "good", texto: `Bases atualizadas: ${fmtInt(d.dataset.baseLinhas)} linhas · ${d.dataset.cds.length} CDs.` });
+      esquecerEnvio(baseFile); esquecerEnvio(pedFile);
       setBaseFile(null); setPedFile(null);
       if (baseRef.current) baseRef.current.value = "";
       if (pedRef.current) pedRef.current.value = "";

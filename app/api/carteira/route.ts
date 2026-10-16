@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
     dataPosicao: store.getDataset().dataPosicao,
     resumo: await carteira.resumo(store.getDataset().dataPosicao),
     durable: carteira.durable(),
+    uploadDireto: !!process.env.BLOB_READ_WRITE_TOKEN,
     eventos: await carteira.eventos(),
   });
 }

@@ -1,6 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextRequest, NextResponse } from "next/server";
 import { getUsuario } from "@/lib/auth";
+import { PREFIXO_UPLOAD } from "@/lib/data/upload";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,19 +27,25 @@ export async function POST(request: NextRequest) {
     const resposta = await handleUpload({
       body,
       request,
-      onBeforeGenerateToken: async (pathname) => ({
-        allowedContentTypes: [
-          "text/csv",
-          "text/plain",
-          "text/tab-separated-values",
-          "application/vnd.ms-excel",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "application/octet-stream",
-        ],
-        addRandomSuffix: true,
-        maximumSizeInBytes: 512 * 1024 * 1024,
-        tokenPayload: JSON.stringify({ usuario, pathname }),
-      }),
+      onBeforeGenerateToken: async (pathname) => {
+        // Só o prefixo de upload: o resto do Blob guarda o insumo e os planos.
+        if (!pathname.startsWith(PREFIXO_UPLOAD)) throw new Error("caminho de upload inválido");
+        return {
+          allowedContentTypes: [
+            "text/csv",
+            "text/plain",
+            "text/tab-separated-values",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+            "application/octet-stream",
+          ],
+          addRandomSuffix: true,
+          maximumSizeInBytes: 512 * 1024 * 1024,
+          tokenPayload: JSON.stringify({ usuario, pathname }),
+        };
+      },
       // O upload termina no Blob; a importação é disparada pela tela em seguida.
       onUploadCompleted: async () => undefined,
     });

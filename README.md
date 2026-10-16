@@ -187,6 +187,12 @@ latin1 é detectado automaticamente.
 de aprovação, com baixa parcial quando a quantidade faturada é menor que a
 aprovada. Linhas sem sugestão correspondente são listadas, e não alteram nada.
 
+A data aceita `dd/mm/aaaa` (também com `-` ou `.`), `aaaa-mm-dd`, `aaaammdd` e
+a **célula de data do Excel** (que chega como número, ex.: `46280`). Data que
+não é reconhecida usa a data do processamento e aparece como aviso na prévia.
+A baixa grava tudo numa transação: ou entram todas as baixas e o registro da
+importação, ou nada entra.
+
 ---
 
 ## 🔁 O ciclo periódico — nada se perde, nada duplica
@@ -230,6 +236,10 @@ Nenhum dos dois casos exige disciplina do operador: a trava é do app.
   acontecer, cancelar devolve o volume à próxima análise.
 - O armazenamento **limpa o que sai da janela** (datasets e planos antigos), em
   vez de crescer para sempre.
+- **A carteira não tem teto no cálculo.** Compromissos, resumo, baixa por NF e
+  ordem de transferência usam todas as sugestões em aberto — só a lista da tela
+  é paginada. Aprovação e baixa gravam em lote (60 mil linhas: ~2 s para aprovar,
+  ~4 s para baixar, medido em Postgres).
 
 ## 🔄 Como uma sugestão caminha
 
@@ -315,6 +325,15 @@ arquivo **direto do navegador para o Vercel Blob** e a importação recebe só a
 URL — o arquivo nunca atravessa a função. Sem o token, o app cai no upload
 tradicional (que funciona local e para arquivos pequenos) e a tela avisa qual
 caminho está ativo.
+
+Vale para as três planilhas — base, pedidos **e faturamento**. Detalhes:
+
+- o arquivo sobe **uma vez** — *Validar* e depois *Importar* reaproveitam o envio;
+- acima de 32 MB o envio vai em partes paralelas, com nova tentativa por parte;
+- CSV, XLSX e XLSB são aceitos (o tipo é reconhecido pelo conteúdo);
+- o arquivo cru é **apagado** depois da importação; o que foi validado e nunca
+  importado é apagado em 24 h;
+- a importação só aceita URL do próprio Blob, na pasta `upload/`.
 
 Números medidos com 300 mil linhas (CSV de 54 MB): importação em ~4 s, e o
 insumo normalizado ocupa **2,1 MB** no armazenamento.
