@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { carteira, normalizarDataFaturamento, qtdNaoRefletida, Sugestao } from "./carteira";
+import { carteira, normalizarDataFaturamento, qtdNaoRefletida, repararDataBaixa, Sugestao } from "./carteira";
 
 /**
  * O ciclo periódico: sobe base, analisa, aprova, fatura, sobe base nova.
@@ -26,6 +26,31 @@ describe("normalização de data do faturamento", () => {
     expect(normalizarDataFaturamento("2026-09-15")!.slice(0, 10)).toBe("2026-09-15");
     expect(normalizarDataFaturamento("")).toBeNull();
     expect(normalizarDataFaturamento("banana")).toBeNull();
+  });
+
+  it("aceita o dia serial do Excel (célula de data em XLSX)", () => {
+    // 46280 = 15/09/2026. Antes virava o ano 46280.
+    expect(normalizarDataFaturamento("46280")!.slice(0, 10)).toBe("2026-09-15");
+    expect(normalizarDataFaturamento(46280)!.slice(0, 10)).toBe("2026-09-15");
+    expect(normalizarDataFaturamento("46280.5")!.slice(0, 10)).toBe("2026-09-15");
+  });
+
+  it("aceita variações de dd/mm/aaaa e aaaammdd", () => {
+    expect(normalizarDataFaturamento("15.09.2026")!.slice(0, 10)).toBe("2026-09-15");
+    expect(normalizarDataFaturamento("15-09-26")!.slice(0, 10)).toBe("2026-09-15");
+    expect(normalizarDataFaturamento("15/09/2026 14:30")!.slice(0, 10)).toBe("2026-09-15");
+    expect(normalizarDataFaturamento("20260915")!.slice(0, 10)).toBe("2026-09-15");
+  });
+
+  it("recusa datas impossíveis em vez de inventar uma", () => {
+    expect(normalizarDataFaturamento("31/02/2026")).toBeNull();
+    expect(normalizarDataFaturamento("12345")).toBeNull(); // serial de 1933
+    expect(normalizarDataFaturamento("9999-01-01")).toBeNull();
+  });
+
+  it("conserta baixas gravadas com o serial lido como ano", () => {
+    expect(repararDataBaixa("+046280-01-01T00:00:00.000Z").slice(0, 10)).toBe("2026-09-15");
+    expect(repararDataBaixa("2026-09-15T12:00:00.000Z")).toBe("2026-09-15T12:00:00.000Z");
   });
 });
 
@@ -205,5 +230,52 @@ describe("ciclo completo de dois lotes", () => {
     await carteira.cancelar([itens[0].id], "user");
     const comp = await carteira.compromissos(D(10));
     expect(comp.saidaOrigem.size).toBe(0);
+  });
+});
+
+describe("escala real da carteira", () => {
+  const muitos = (n: number) =>
+    Array.from({ length: n }, (_, i) => item(10, { codigoProduto: i + 1 }));
+
+  it("mais de 5.000 sugestões em aberto: todas descontam e todas aparecem no resumo", async () => {
+    await carteira.aprovar("a1", muitos(6000), "user", { consideraAprovadas: true });
+    const c = await carteira.compromissos("");
+    expect(c.saidaOrigem.size).toBe(6000);
+    const r = await carteira.resumo("");
+    expect(r.aprovadas).toBe(6000);
+    expect(r.qtdAberta).toBe(60000);
+    expect((await carteira.listarAbertas()).length).toBe(6000);
+  });
+
+  it("a NF dá baixa também na sugestão mais antiga de uma carteira grande", async () => {
+    await carteira.aprovar("a1", muitos(6000), "user", { consideraAprovadas: true });
+    const r = await carteira.baixarFaturamento(
+      [{ cdOrigem: 10, cdDestino: 1, codigoProduto: 1, quantidade: 10, documento: "NF-1" }],
+      "user", "fat.csv", "imp-1",
+    );
+    expect(r.qtdBaixada).toBe(10);
+  });
+
+  it("a tela continua com teto, o cálculo não", async () => {
+    await carteira.aprovar("a1", muitos(600), "user", { consideraAprovadas: true });
+    expect((await carteira.listar({ status: "aprovada" })).length).toBe(500);
+    expect((await carteira.chavesDaAnalise("a1")).size).toBe(600);
+  });
+
+  it("NF com data de Excel: baixa com a data certa e avisa data ilegível", async () => {
+    await carteira.aprovar("a1", [item(500)], "user", { consideraAprovadas: true });
+    const r = await carteira.baixarFaturamento(
+      [
+        { cdOrigem: 10, cdDestino: 1, codigoProduto: 111, quantidade: 300, data: "46280", documento: "NF-1" },
+        { cdOrigem: 10, cdDestino: 1, codigoProduto: 111, quantidade: 100, data: "ontem", documento: "NF-2" },
+      ],
+      "user", "fat.xlsx", "imp-1",
+    );
+    const s = (await carteira.listar({ status: "todas" }))[0];
+    expect(s.baixas[0].em.slice(0, 10)).toBe("2026-09-15");
+    expect(r.achados.some((a) => a.codigo === "data_nao_reconhecida" && a.qtd === 1)).toBe(true);
+    // Base do dia 10 (antes da NF de 15/09): os 300 ainda não estão refletidos.
+    const comp = await carteira.compromissos(D(10));
+    expect(comp.saidaOrigem.get("10|111")).toBeGreaterThanOrEqual(400);
   });
 });

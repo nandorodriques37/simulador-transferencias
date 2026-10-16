@@ -40,11 +40,7 @@ export async function GET(req: NextRequest) {
   const pagina = paginar(ordenadas, page, pageSize);
 
   // Marca as linhas que já estão na carteira desta análise.
-  const aprovadas = new Set(
-    (await carteira.listar({ status: "todas", limite: 5000 }))
-      .filter((x) => x.analiseId === plano.id && x.status !== "cancelada")
-      .map((x) => `${x.cdOrigem}>${x.cdDestino}|${x.codigoProduto}`),
-  );
+  const aprovadas = await carteira.chavesDaAnalise(plano.id);
 
   const totaisFiltro = filtradas.reduce(
     (acc, l) => {
