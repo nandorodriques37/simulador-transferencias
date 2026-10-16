@@ -3,7 +3,7 @@ import { store } from "@/lib/store";
 import { carteira } from "@/lib/store/carteira";
 import { analisesStore } from "@/lib/store/analises";
 import { repositorio } from "@/lib/store/repositorio";
-import { backend } from "@/lib/store/armazenamento";
+import { acessoBlob, backend } from "@/lib/store/armazenamento";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,7 @@ export async function GET() {
       destino: analisesStore.destino(),
       ultima: (await analisesStore.listar(1))[0] ?? null,
     },
-    armazenamento: { backend: backend(), uploadDireto: !!process.env.BLOB_READ_WRITE_TOKEN },
+    armazenamento: { backend: backend(), uploadDireto: !!process.env.BLOB_READ_WRITE_TOKEN, acesso: acessoBlob() },
     parametros: store.getParametros(),
     carteira: { ...(await carteira.resumo(store.getDataset().dataPosicao)), durable: carteira.durable() },
     analiseAtual: analise

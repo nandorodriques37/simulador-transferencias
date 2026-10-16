@@ -369,11 +369,19 @@ npm run dev        # http://localhost:3000
    **resultado das análises** (`analise_resultado`) — as tabelas são criadas sob
    demanda.
 
-3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store e conecte ao
-   projeto; `BLOB_READ_WRITE_TOKEN` é injetada automaticamente. É o que
-   habilita o **upload direto** (arquivos acima de 4,5 MB) e o que faz o insumo
-   sobreviver à troca de instância. Sem ele, o app grava em `.data/` no disco
-   local — bom para desenvolvimento, efêmero no serverless.
+3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store com acesso
+   **Private** e conecte ao projeto; `BLOB_READ_WRITE_TOKEN` é injetada
+   automaticamente. É o que habilita o **upload direto** (arquivos acima de
+   4,5 MB) e o que faz o insumo sobreviver à troca de instância. Sem ele, o app
+   grava em `.data/` no disco local — bom para desenvolvimento, efêmero no
+   serverless.
+
+   > **Por que privado.** A base traz estoque e custo de todos os CDs. Numa loja
+   > pública, qualquer pessoa com a URL de um arquivo lê o conteúdo. Na privada,
+   > toda leitura exige o token, que só o servidor tem. O acesso é escolhido na
+   > criação da loja e não muda depois; o app usa privado por padrão. Uma loja
+   > pública já existente só funciona com `BLOB_ACESSO=public` — prefira criar
+   > outra, privada.
 
    Sem banco **e** sem Blob, tudo roda em memória: útil para avaliar, mas a tela
    sinaliza o estado e nada sobrevive a um novo deploy.
@@ -384,6 +392,7 @@ npm run dev        # http://localhost:3000
    |---|---|
    | `POSTGRES_URL` / `DATABASE_URL` | carteira e resultados das análises |
    | `BLOB_READ_WRITE_TOKEN` | upload direto e insumo durável |
+   | `BLOB_ACESSO` | `public` só para uma loja pública antiga (padrão: privada) |
    | `DADOS_DIR` | pasta local do armazenamento em disco (padrão `.data`) |
    | `DEMO_DATA` | `1` força a base de exemplo; `0` desliga em qualquer ambiente |
 

@@ -4,6 +4,8 @@
  * importação, apagada — o arquivo cru não tem por que ficar guardado.
  */
 
+import { lerBlob } from "@/lib/store/armazenamento";
+
 /** Prefixo dos arquivos crus enviados pela tela. */
 export const PREFIXO_UPLOAD = "upload/";
 
@@ -26,10 +28,10 @@ export function urlDeUploadValida(url: string): boolean {
 /** Baixa um arquivo já enviado ao armazenamento e o devolve como File. */
 export async function baixarUpload(url: string, nomePadrao: string): Promise<File> {
   if (!urlDeUploadValida(url)) throw new Error("endereço de arquivo não reconhecido");
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`não foi possível ler o arquivo enviado (${resp.status})`);
+  const bytes = await lerBlob(url).catch(() => null);
+  if (!bytes) throw new Error("não foi possível ler o arquivo enviado");
   const nome = decodeURIComponent(new URL(url).pathname.split("/").pop() || nomePadrao);
-  return new File([await resp.arrayBuffer()], nome);
+  return new File([new Uint8Array(bytes)], nome);
 }
 
 /**

@@ -18,6 +18,28 @@ export function backend(): BackendArmazenamento {
   return process.env.BLOB_READ_WRITE_TOKEN ? "blob" : "disco";
 }
 
+/**
+ * Acesso da loja do Blob. A loja é criada **privada** ou pública no painel do
+ * Vercel, e a escolha não muda depois. Privada é o padrão: a base tem estoque
+ * e custo de todos os CDs, e numa loja pública qualquer um com a URL lê o
+ * arquivo. `BLOB_ACESSO=public` só para uma loja pública já existente.
+ */
+export function acessoBlob(): "public" | "private" {
+  return process.env.BLOB_ACESSO === "public" ? "public" : "private";
+}
+
+/**
+ * Lê um objeto do Blob (URL ou caminho) como bytes. Na loja privada a leitura
+ * exige o token, por isso nunca um `fetch` direto. Sem cache: o catálogo é
+ * regravado no mesmo caminho, e a cópia do CDN podia vir velha.
+ */
+export async function lerBlob(urlOuCaminho: string): Promise<Buffer | null> {
+  const { get } = await import("@vercel/blob");
+  const r = await get(urlOuCaminho, { access: acessoBlob(), useCache: false });
+  if (!r || r.statusCode !== 200) return null;
+  return Buffer.from(await new Response(r.stream).arrayBuffer());
+}
+
 /** `true` quando o armazenamento sobrevive à troca de instância. */
 export function armazenamentoDuravel(): boolean {
   return backend() === "blob";
@@ -37,7 +59,7 @@ export async function guardar(chave: string, texto: string): Promise<{ chave: st
   if (backend() === "blob") {
     const { put } = await import("@vercel/blob");
     const r = await put(chave, conteudo, {
-      access: "public",
+      access: acessoBlob(),
       contentType: "application/gzip",
       addRandomSuffix: false,
       allowOverwrite: true,
@@ -55,12 +77,9 @@ export async function guardar(chave: string, texto: string): Promise<{ chave: st
 /** Lê o texto guardado. Devolve `null` quando a chave não existe. */
 export async function recuperar(chave: string): Promise<string | null> {
   if (backend() === "blob") {
-    const { head } = await import("@vercel/blob");
     try {
-      const meta = await head(chave);
-      const resp = await fetch(meta.url);
-      if (!resp.ok) return null;
-      return gunzipSync(Buffer.from(await resp.arrayBuffer())).toString("utf8");
+      const bytes = await lerBlob(chave);
+      return bytes ? gunzipSync(bytes).toString("utf8") : null;
     } catch {
       return null;
     }
@@ -76,10 +95,9 @@ export async function recuperar(chave: string): Promise<string | null> {
 /** Remove um objeto (silencioso quando não existe). */
 export async function remover(chave: string): Promise<void> {
   if (backend() === "blob") {
-    const { del, head } = await import("@vercel/blob");
+    const { del } = await import("@vercel/blob");
     try {
-      const meta = await head(chave);
-      await del(meta.url);
+      await del(chave);
     } catch {
       /* já não existe */
     }

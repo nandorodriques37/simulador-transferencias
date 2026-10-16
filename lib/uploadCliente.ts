@@ -19,6 +19,8 @@ export async function enviarDireto(
   arquivo: File,
   prefixo: string,
   aoProgredir?: (pct: number) => void,
+  /** Acesso da loja do Blob (o servidor informa; privada por padrão). */
+  acesso: "public" | "private" = "private",
 ): Promise<string> {
   const ja = enviados.get(arquivo);
   if (ja) {
@@ -27,7 +29,7 @@ export async function enviarDireto(
   }
   const { upload } = await import("@vercel/blob/client");
   const blob = await upload(`upload/${prefixo}-${Date.now()}-${arquivo.name}`, arquivo, {
-    access: "public",
+    access: acesso,
     contentType: "application/octet-stream",
     handleUploadUrl: "/api/blob/upload",
     multipart: arquivo.size > LIMIAR_MULTIPART,

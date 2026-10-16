@@ -5,6 +5,7 @@ import { carteira, NovaSugestao, StatusSugestao } from "@/lib/store/carteira";
 import { analisesStore } from "@/lib/store/analises";
 import { filtrarPlano } from "@/lib/query/plano";
 import { rotuloMes } from "@/lib/data/defaults";
+import { acessoBlob } from "@/lib/store/armazenamento";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
     resumo: await carteira.resumo(store.getDataset().dataPosicao),
     durable: carteira.durable(),
     uploadDireto: !!process.env.BLOB_READ_WRITE_TOKEN,
+    acessoBlob: acessoBlob(),
     eventos: await carteira.eventos(),
   });
 }

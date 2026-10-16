@@ -72,6 +72,7 @@ export default function NovaAnalise() {
   const [rodando, setRodando] = useState(false);
   const [limitarRota, setLimitarRota] = useState(false);
   const [uploadDireto, setUploadDireto] = useState(false);
+  const [acessoBlob, setAcessoBlob] = useState<"public" | "private">("private");
   const [dataPosicao, setDataPosicao] = useState("");
   const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
   const [erroCarga, setErroCarga] = useState<string | null>(null);
@@ -98,6 +99,7 @@ export default function NovaAnalise() {
         setParams(d.parametros);
         setDataset(d.dataset);
         setUploadDireto(!!d.armazenamento?.uploadDireto);
+        setAcessoBlob(d.armazenamento?.acesso === "public" ? "public" : "private");
         setResultadosDuraveis(!!d.resultados?.duravel);
       })
       // O status é o que sustenta a tela inteira: sem ele não há o que mostrar.
@@ -167,9 +169,9 @@ export default function NovaAnalise() {
       // direto do navegador para o armazenamento e a importação recebe a URL.
       // Base e pedidos dividem a barra: cada um ocupa sua metade dos 70%.
       const peso = baseFile && pedFile ? 0.35 : 0.7;
-      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso))) : undefined;
+      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso)), acessoBlob) : undefined;
       const inicio = baseFile ? Math.round(100 * peso) : 0;
-      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso))) : undefined;
+      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso)), acessoBlob) : undefined;
       setProgresso(75);
       r = await fetch("/api/import", {
         method: "POST",
