@@ -4,7 +4,7 @@
  * importação, apagada — o arquivo cru não tem por que ficar guardado.
  */
 
-import { lerBlob } from "@/lib/store/armazenamento";
+import { blobConfigurado, lerBlob } from "@/lib/store/armazenamento";
 
 /** Prefixo dos arquivos crus enviados pela tela. */
 export const PREFIXO_UPLOAD = "upload/";
@@ -39,7 +39,7 @@ export async function baixarUpload(url: string, nomePadrao: string): Promise<Fil
  * Nunca falha: limpeza é higiene, não pode derrubar uma importação que deu certo.
  */
 export async function limparUploads(urls: (string | undefined)[]): Promise<void> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return;
+  if (!blobConfigurado()) return;
   try {
     const { del, list } = await import("@vercel/blob");
     const alvo = urls.filter((u): u is string => !!u && urlDeUploadValida(u));

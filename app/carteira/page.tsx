@@ -19,7 +19,7 @@ interface Resumo {
   aprovadas: number; qtdAberta: number; valorAberto: number; faturadas: number; qtdFaturada: number;
   qtdNaoRefletida: number; valorNaoRefletido: number; envelhecidas: number; diasMaisAntiga: number;
 }
-interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; uploadDireto?: boolean; acessoBlob?: "public" | "private"; eventos: Evento[]; dataPosicao?: string }
+interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; uploadDireto?: boolean; acessoBlob?: "public" | "private"; modoUpload?: "presigned" | "token" | null; eventos: Evento[]; dataPosicao?: string }
 interface Achado { nivel: "erro" | "aviso" | "info"; mensagem: string; qtd: number; exemplos?: string[] }
 
 const nivelTom = { erro: "erro", aviso: "warn", info: "info" } as const;
@@ -96,7 +96,7 @@ export default function Carteira() {
       if (data.uploadDireto) {
         // Acima de 4,5 MB o arquivo não cabe no corpo da função: vai direto
         // ao armazenamento e a rota recebe só a URL.
-        const url = await enviarDireto(fatFile, "faturamento", (p) => setProgresso(Math.round(p * 0.7)), data.acessoBlob ?? "private");
+        const url = await enviarDireto(fatFile, "faturamento", (p) => setProgresso(Math.round(p * 0.7)), data.acessoBlob ?? "private", data.modoUpload === "token" ? "token" : "presigned");
         setProgresso(75);
         r = await fetch("/api/faturamento", {
           method: "POST",

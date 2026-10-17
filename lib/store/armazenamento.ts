@@ -4,7 +4,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
  * Armazenamento de objetos grandes (base e pedidos normalizados).
  *
  * Dois backends, mesma API:
- * - **Vercel Blob** quando `BLOB_READ_WRITE_TOKEN` está definido — durável e
+ * - **Vercel Blob** quando a loja está conectada ao projeto — durável e
  *   compartilhado entre instâncias, que é o que o serverless exige.
  * - **Disco local** (`.data/`) caso contrário — para desenvolvimento e testes.
  *
@@ -15,7 +15,29 @@ import { gunzipSync, gzipSync } from "node:zlib";
 export type BackendArmazenamento = "blob" | "disco";
 
 export function backend(): BackendArmazenamento {
-  return process.env.BLOB_READ_WRITE_TOKEN ? "blob" : "disco";
+  return blobConfigurado() ? "blob" : "disco";
+}
+
+/**
+ * Loja do Blob conectada. Dois jeitos de autenticar, e o SDK escolhe sozinho:
+ * - **OIDC** (lojas novas): o Vercel injeta só `BLOB_STORE_ID`, e a função
+ *   recebe um token de curta duração a cada requisição;
+ * - **token fixo** (lojas antigas): `BLOB_READ_WRITE_TOKEN`.
+ */
+export function blobConfigurado(): boolean {
+  return !!(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
+}
+
+/**
+ * Como o navegador envia arquivo grande direto ao Blob:
+ * - `"presigned"` — URL pré-assinada emitida pelo servidor (funciona com OIDC);
+ * - `"token"` — token de cliente gerado do token fixo (lojas antigas);
+ * - `null` — sem Blob: o arquivo passa pela função (até 4,5 MB).
+ */
+export function modoUploadDireto(): "presigned" | "token" | null {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return "token";
+  if (process.env.BLOB_STORE_ID) return "presigned";
+  return null;
 }
 
 /**

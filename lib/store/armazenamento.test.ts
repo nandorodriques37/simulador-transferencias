@@ -26,7 +26,7 @@ vi.mock("@vercel/blob", () => ({
   },
 }));
 
-import { acessoBlob, guardar, recuperar, remover } from "./armazenamento";
+import { acessoBlob, backend, guardar, modoUploadDireto, recuperar, remover } from "./armazenamento";
 
 beforeEach(() => {
   process.env.BLOB_READ_WRITE_TOKEN = "teste";
@@ -35,7 +35,27 @@ beforeEach(() => {
 });
 afterEach(() => {
   delete process.env.BLOB_READ_WRITE_TOKEN;
+  delete process.env.BLOB_STORE_ID;
   delete process.env.BLOB_ACESSO;
+});
+
+describe("detecção da loja conectada", () => {
+  it("loja nova (OIDC) só traz BLOB_STORE_ID: usa o Blob e a URL pré-assinada", () => {
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    process.env.BLOB_STORE_ID = "store_abc";
+    expect(backend()).toBe("blob");
+    expect(modoUploadDireto()).toBe("presigned");
+  });
+
+  it("loja antiga com token fixo usa o token de cliente", () => {
+    expect(modoUploadDireto()).toBe("token");
+  });
+
+  it("sem loja: disco e sem upload direto", () => {
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    expect(backend()).toBe("disco");
+    expect(modoUploadDireto()).toBeNull();
+  });
 });
 
 describe("armazenamento no Blob", () => {

@@ -6,7 +6,7 @@ import { Alert, Badge, Campo, Chave, ErroCarga, Fonte, PageHeader, Progress, Rol
 import { Icone } from "@/components/icones";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
-import { enviarDireto, esquecerEnvio } from "@/lib/uploadCliente";
+import { enviarDireto, esquecerEnvio, type ModoUpload } from "@/lib/uploadCliente";
 
 type ModoDemanda = "saldo_ideal" | "pedidos";
 
@@ -73,6 +73,7 @@ export default function NovaAnalise() {
   const [limitarRota, setLimitarRota] = useState(false);
   const [uploadDireto, setUploadDireto] = useState(false);
   const [acessoBlob, setAcessoBlob] = useState<"public" | "private">("private");
+  const [modoUpload, setModoUpload] = useState<ModoUpload>("presigned");
   const [dataPosicao, setDataPosicao] = useState("");
   const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
   const [erroCarga, setErroCarga] = useState<string | null>(null);
@@ -100,6 +101,7 @@ export default function NovaAnalise() {
         setDataset(d.dataset);
         setUploadDireto(!!d.armazenamento?.uploadDireto);
         setAcessoBlob(d.armazenamento?.acesso === "public" ? "public" : "private");
+        setModoUpload(d.armazenamento?.modoUpload === "token" ? "token" : "presigned");
         setResultadosDuraveis(!!d.resultados?.duravel);
       })
       // O status é o que sustenta a tela inteira: sem ele não há o que mostrar.
@@ -169,9 +171,9 @@ export default function NovaAnalise() {
       // direto do navegador para o armazenamento e a importação recebe a URL.
       // Base e pedidos dividem a barra: cada um ocupa sua metade dos 70%.
       const peso = baseFile && pedFile ? 0.35 : 0.7;
-      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso)), acessoBlob) : undefined;
+      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso)), acessoBlob, modoUpload) : undefined;
       const inicio = baseFile ? Math.round(100 * peso) : 0;
-      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso)), acessoBlob) : undefined;
+      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso)), acessoBlob, modoUpload) : undefined;
       setProgresso(75);
       r = await fetch("/api/import", {
         method: "POST",

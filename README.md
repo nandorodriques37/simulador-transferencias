@@ -330,7 +330,7 @@ que ela sai de cena, o app trabalha com 325 MB.
 ### Upload de arquivo grande
 
 O corpo de uma função serverless no Vercel não passa de **4,5 MB**, e a base real
-tem dezenas de MB. Com `BLOB_READ_WRITE_TOKEN` configurado, a tela envia o
+tem dezenas de MB. Com um Blob store conectado ao projeto, a tela envia o
 arquivo **direto do navegador para o Vercel Blob** e a importação recebe só a
 URL — o arquivo nunca atravessa a função. Sem o token, o app cai no upload
 tradicional (que funciona local e para arquivos pequenos) e a tela avisa qual
@@ -370,8 +370,10 @@ npm run dev        # http://localhost:3000
    demanda.
 
 3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store com acesso
-   **Private** e conecte ao projeto; `BLOB_READ_WRITE_TOKEN` é injetada
-   automaticamente. É o que habilita o **upload direto** (arquivos acima de
+   **Private** e conecte ao projeto. Lojas novas autenticam por **OIDC**: o
+   Vercel injeta só `BLOB_STORE_ID`, e o upload direto usa URL pré-assinada
+   emitida pelo servidor. Lojas antigas, com `BLOB_READ_WRITE_TOKEN`, seguem
+   funcionando pelo token de cliente. É o que habilita o **upload direto** (arquivos acima de
    4,5 MB) e o que faz o insumo sobreviver à troca de instância. Sem ele, o app
    grava em `.data/` no disco local — bom para desenvolvimento, efêmero no
    serverless.
@@ -391,7 +393,8 @@ npm run dev        # http://localhost:3000
    | Variável | Para quê |
    |---|---|
    | `POSTGRES_URL` / `DATABASE_URL` | carteira e resultados das análises |
-   | `BLOB_READ_WRITE_TOKEN` | upload direto e insumo durável |
+   | `BLOB_STORE_ID` | loja do Blob conectada por OIDC (lojas novas) |
+   | `BLOB_READ_WRITE_TOKEN` | loja do Blob com token fixo (lojas antigas) |
    | `BLOB_ACESSO` | `public` só para uma loja pública antiga (padrão: privada) |
    | `DADOS_DIR` | pasta local do armazenamento em disco (padrão `.data`) |
    | `DEMO_DATA` | `1` força a base de exemplo; `0` desliga em qualquer ambiente |
