@@ -355,8 +355,7 @@ export default function NovaAnalise() {
                     <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => baseRef.current?.click()}>{baseFile ? "Trocar" : "Escolher arquivo"}</button>
                   </div>
                   <span className="pgm-campo__ajuda">
-                    <b>Obrigatórias:</b> CD · código do produto · estoque disponível · estoque objetivo · venda média 3m (média mensal).{" "}
-                    <b>Para o plano ficar legível:</b> descrição do produto · categoria N3.{" "}
+                    <b>Obrigatórias:</b> CD · código do produto · descrição do produto · categoria N3 · estoque disponível · estoque objetivo · venda média 3m (média mensal dos 3 meses).{" "}
                     <b>Recomendadas:</b> quantidade pendente · custo · embalagem.
                     {dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}
                   </span>

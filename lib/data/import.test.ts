@@ -14,6 +14,7 @@ const linhaBase = (over: Record<string, unknown> = {}) => ({
   "Venda_ QTD_Média3meses": 200,
   PRDP_VL_CMPCSICMS: 10.5,
   Qt_Emb_Compra: 12,
+  "CAT_NÍVEL_3": "SIST. NERVOSO",
   ...over,
 });
 
@@ -29,7 +30,7 @@ describe("parse da base de CDs", () => {
 
   it("aceita números em pt-BR e nomes alternativos de coluna", () => {
     const { itens } = parseBase([
-      { cd: "10", codigo_produto: "111", estoque_disponivel: "1.234,50", estoque_objetivo: "100", venda_media_3m: "10,5" },
+      { cd: "10", codigo_produto: "111", produto: "DIPIRONA", categoria_n3: "ANALGÉSICOS", estoque_disponivel: "1.234,50", estoque_objetivo: "100", venda_media_3m: "10,5" },
     ]);
     expect(itens[0].estoqueDisponivel).toBeCloseTo(1234.5, 6);
     expect(itens[0].vendaMedia3m).toBeCloseTo(10.5, 6);
@@ -37,7 +38,7 @@ describe("parse da base de CDs", () => {
 
   it("aceita custo e embalagem com nome curto (layout do extrator do BD)", () => {
     const { itens, diag } = parseBase([
-      { cd: 1, codigo_produto: 8, estoque_disponivel: 725, estoque_objetivo: 951, quantidade_pendente: 0, venda_media_3m: 705, custo: "66.6", embalagem: 112 },
+      { cd: 1, codigo_produto: 8, descricao_produto: "DEPAKENE", categoria_n3: "SIST. NERVOSO", estoque_disponivel: 725, estoque_objetivo: 951, quantidade_pendente: 0, venda_media_3m: 705, custo: "66.6", embalagem: 112 },
     ]);
     expect(diag.ignoradas).toHaveLength(0);
     expect(itens[0].custoReposicao).toBeCloseTo(66.6, 6);
@@ -46,8 +47,8 @@ describe("parse da base de CDs", () => {
 
   it("aviso de preço só conta linha que pode ser origem", () => {
     const { itens, diag } = parseBase([
-      { cd: 1, codigo_produto: 1, estoque_disponivel: 0, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 0 }, // destino sem custo
-      { cd: 2, codigo_produto: 1, estoque_disponivel: 500, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 12 }, // origem sem custo
+      { cd: 1, codigo_produto: 1, produto: "P", categoria_n3: "C", estoque_disponivel: 0, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 0 }, // destino sem custo
+      { cd: 2, codigo_produto: 1, produto: "P", categoria_n3: "C", estoque_disponivel: 500, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 12 }, // origem sem custo
     ]);
     const r = validarImportacao(itens, [], diag, undefined, "saldo_ideal");
     expect(r.achados.find((a) => a.codigo === "sem_preco")?.qtd).toBe(1);
@@ -55,15 +56,23 @@ describe("parse da base de CDs", () => {
     expect(r.achados.some((a) => a.codigo === "emb_zero")).toBe(false);
   });
 
-  it("avisa quando faltam descrição e categoria N3, sem bloquear", () => {
+  it("bloqueia a base sem descrição ou sem categoria N3", () => {
     const { itens, diag } = parseBase([{ cd: 1, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1 }]);
+    expect(diag.faltando.map((f) => f.campo).sort()).toEqual(["categoriaN3", "produto"]);
     const r = validarImportacao(itens, [], diag, undefined, "saldo_ideal");
-    const a = r.achados.find((x) => x.codigo === "sem_descricao");
-    expect(r.ok).toBe(true);
-    expect(a?.qtd).toBe(2);
-    const com = parseBase([{ cd: 1, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1, produto: "DIPIRONA", categoria_n3: "ANALGÉSICOS" }]);
+    expect(r.ok).toBe(false);
+    expect(r.achados.filter((x) => x.codigo === "coluna_faltando")).toHaveLength(2);
+  });
+
+  it("com as colunas presentes, linha em branco só informa", () => {
+    const com = parseBase([
+      { cd: 1, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1, produto: "DIPIRONA", categoria_n3: "ANALGÉSICOS" },
+      { cd: 2, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1, produto: "DIPIRONA", categoria_n3: "" },
+    ]);
     expect(com.itens[0].categoriaN3).toBe("ANALGÉSICOS");
-    expect(validarImportacao(com.itens, [], com.diag, undefined, "saldo_ideal").achados.some((x) => x.codigo === "sem_descricao")).toBe(false);
+    const r = validarImportacao(com.itens, [], com.diag, undefined, "saldo_ideal");
+    expect(r.ok).toBe(true);
+    expect(r.achados.find((x) => x.codigo === "descricao_vazia")).toMatchObject({ nivel: "info", qtd: 1 });
   });
 
   it("aponta a coluna obrigatória ausente com os nomes aceitos", () => {
@@ -159,9 +168,9 @@ describe("leitura de CSV (caminho leve)", () => {
 
   it("o parser dirigido por esquema consome CSV direto", () => {
     const csv = [
-      "Deposito;CodsemDv;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
-      "10;111;1.000,50;100;200",
-      "1;111;50;600;120",
+      "Deposito;CodsemDv;Produto;CAT_NÍVEL_3;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
+      "10;111;DIPIRONA;ANALGÉSICOS;1.000,50;100;200",
+      "1;111;DIPIRONA;ANALGÉSICOS;50;600;120",
     ].join("\n");
     const { itens, diag } = parseBase(tabelaDeCsv(csv));
     expect(diag.faltando).toHaveLength(0);
@@ -172,9 +181,9 @@ describe("leitura de CSV (caminho leve)", () => {
 
   it("aponta a linha exata do erro no CSV", () => {
     const csv = [
-      "Deposito;CodsemDv;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
-      "10;111;100;100;200",
-      "10;112;-5;100;200",
+      "Deposito;CodsemDv;Produto;CAT_NÍVEL_3;Estoque_DISP_CDs;ESTOQUE_OBJETIVO;Venda_ QTD_Média3meses",
+      "10;111;A;C;100;100;200",
+      "10;112;B;C;-5;100;200",
     ].join("\n");
     const { diag } = parseBase(tabelaDeCsv(csv));
     expect(diag.errosLinha[0].linha).toBe(3);

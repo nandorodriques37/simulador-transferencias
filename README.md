@@ -164,12 +164,12 @@ latin1 é detectado automaticamente.
 | Código do produto (`CodsemDv`) | `codigoProduto` | ✅ |
 | Estoque disponível | `estoqueDisponivel` | ✅ |
 | Estoque objetivo | `estoqueObjetivo` | ✅ |
-| Venda média 3 meses | `vendaMedia3m` | ✅ |
+| Venda média 3 meses (**média mensal**) | `vendaMedia3m` | ✅ |
 | Quantidade pendente | `quantidadePendente` | — |
 | Custo de reposição (`custo`, `custo_reposicao`…) / Preço de lista | `custoReposicao` / `precoLista` | — |
 | Embalagem de compra (`embalagem`, `emb_compra`…) | `embCompra` | — |
-| Descrição do produto (`produto`, `descricao`, `nome_produto`) | `produto` | ⚠️ não bloqueia, mas sem ela o plano mostra só o código |
-| Categoria N3 (`categoria_n3`, `CAT_NÍVEL_3`, `categoria`) | `categoriaN3` | ⚠️ é a categoria exibida e filtrada no plano (sem N3, usa a N1) |
+| Descrição do produto (`produto`, `descricao`, `descricao_produto`) | `produto` | ✅ |
+| Categoria N3 (`categoria_n3`, `CAT_NÍVEL_3`, `categoria`) | `categoriaN3` | ✅ — é a categoria exibida e filtrada no plano |
 | Fornecedor · comprador · analista · categorias N1, N2, N4 | — | — |
 | Unidades por palete | `unidadesPorPalete` | — (só para capacidade em paletes) |
 | Peso unitário (kg) | `pesoUnitario` | — (só para capacidade em peso) |

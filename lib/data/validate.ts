@@ -126,22 +126,11 @@ export function validarImportacao(
   if (dupPed.length)
     add({ nivel: "aviso", codigo: "pedido_duplicado", mensagem: "Chaves (ano_mês, CD, produto) repetidas na base de pedidos — as quantidades serão somadas.", qtd: dupPed.length, exemplos: dupPed });
 
-  // --- Descrição e categoria N3: não entram na conta, mas sem elas o plano
-  // vira uma lista de códigos que ninguém consegue revisar nem filtrar. ---
+  // --- Descrição e categoria N3 em branco em parte das linhas ---
   if (diagBase && base.length) {
+    // Ausência da coluna já bloqueia (obrigatória no esquema). Aqui só o
+    // que veio em branco em algumas linhas — informa, não bloqueia.
     const mapeado = new Set(diagBase.mapeadas.map((m) => m.campo));
-    const faltaCol = [
-      !mapeado.has("produto") && "descrição do produto (produto, descricao, nome_produto)",
-      !mapeado.has("categoriaN3") && "categoria N3 (categoria_n3, CAT_NÍVEL_3, categoria)",
-    ].filter(Boolean) as string[];
-    if (faltaCol.length)
-      add({
-        nivel: "aviso",
-        codigo: "sem_descricao",
-        mensagem: "A base não traz colunas que o plano usa para revisar e filtrar. O cálculo sai certo, mas o plano mostra só o código. Inclua na próxima base:",
-        qtd: faltaCol.length,
-        exemplos: faltaCol,
-      });
     const vazias = (campo: "produto" | "categoriaN3") => (mapeado.has(campo) ? base.filter((l) => !l[campo]).length : 0);
     const semNome = vazias("produto");
     const semCat = vazias("categoriaN3");
