@@ -166,8 +166,8 @@ latin1 é detectado automaticamente.
 | Estoque objetivo | `estoqueObjetivo` | ✅ |
 | Venda média 3 meses | `vendaMedia3m` | ✅ |
 | Quantidade pendente | `quantidadePendente` | — |
-| Custo de reposição / Preço de lista | `custoReposicao` / `precoLista` | — |
-| Embalagem de compra | `embCompra` | — |
+| Custo de reposição (`custo`, `custo_reposicao`…) / Preço de lista | `custoReposicao` / `precoLista` | — |
+| Embalagem de compra (`embalagem`, `emb_compra`…) | `embCompra` | — |
 | Fornecedor · comprador · analista · categorias N1–N4 | — | — |
 | Unidades por palete | `unidadesPorPalete` | — (só para capacidade em paletes) |
 | Peso unitário (kg) | `pesoUnitario` | — (só para capacidade em peso) |

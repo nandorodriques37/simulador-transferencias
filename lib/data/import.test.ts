@@ -35,6 +35,26 @@ describe("parse da base de CDs", () => {
     expect(itens[0].vendaMedia3m).toBeCloseTo(10.5, 6);
   });
 
+  it("aceita custo e embalagem com nome curto (layout do extrator do BD)", () => {
+    const { itens, diag } = parseBase([
+      { cd: 1, codigo_produto: 8, estoque_disponivel: 725, estoque_objetivo: 951, quantidade_pendente: 0, venda_media_3m: 705, custo: "66.6", embalagem: 112 },
+    ]);
+    expect(diag.ignoradas).toHaveLength(0);
+    expect(itens[0].custoReposicao).toBeCloseTo(66.6, 6);
+    expect(itens[0].embCompra).toBe(112);
+  });
+
+  it("aviso de preço só conta linha que pode ser origem", () => {
+    const { itens, diag } = parseBase([
+      { cd: 1, codigo_produto: 1, estoque_disponivel: 0, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 0 }, // destino sem custo
+      { cd: 2, codigo_produto: 1, estoque_disponivel: 500, estoque_objetivo: 50, venda_media_3m: 10, custo: 0, embalagem: 12 }, // origem sem custo
+    ]);
+    const r = validarImportacao(itens, [], diag, undefined, "saldo_ideal");
+    expect(r.achados.find((a) => a.codigo === "sem_preco")?.qtd).toBe(1);
+    expect(r.achados.find((a) => a.codigo === "custo_zero")?.nivel).toBe("info");
+    expect(r.achados.some((a) => a.codigo === "emb_zero")).toBe(false);
+  });
+
   it("aponta a coluna obrigatória ausente com os nomes aceitos", () => {
     const { diag } = parseBase([{ Deposito: 10, CodsemDv: 111, Estoque_DISP_CDs: 10, ESTOQUE_OBJETIVO: 5 }]);
     expect(diag.faltando.map((f) => f.campo)).toContain("vendaMedia3m");

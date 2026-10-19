@@ -127,17 +127,44 @@ export function validarImportacao(
     add({ nivel: "aviso", codigo: "pedido_duplicado", mensagem: "Chaves (ano_mês, CD, produto) repetidas na base de pedidos — as quantidades serão somadas.", qtd: dupPed.length, exemplos: dupPed });
 
   // --- Avisos de negócio (não bloqueiam) ---
+  // Preço e embalagem só pesam na linha que pode ser ORIGEM: a transferência é
+  // valorizada pelo custo da origem e arredondada pela embalagem dela. Contar
+  // todas as linhas assustava à toa — numa base real, quase toda linha sem custo
+  // é CD sem o produto (destino), e a origem que atende já traz o próprio custo.
+  const temExcesso = (l: LinhaBase) => l.estoqueDisponivel + l.quantidadePendente - l.vendaMedia3m - l.estoqueObjetivo > 0;
+  const soPeloPendente = (l: LinhaBase) => l.estoqueDisponivel - l.vendaMedia3m - l.estoqueObjetivo <= 0;
+  const origens = base.filter(temExcesso);
+
+  const semPreco = origens.filter((l) => l.custoReposicao === 0 && l.precoLista === 0);
+  if (semPreco.length) {
+    const pendente = semPreco.filter(soPeloPendente).length;
+    add({
+      nivel: "aviso",
+      codigo: "sem_preco",
+      mensagem:
+        "Linhas com excesso (podem ser origem) sem custo nem preço de lista: o que elas transferirem sai sem valor em R$." +
+        (pendente ? ` ${pendente} delas só têm excesso por causa do pendente — com "Excesso físico" ligado, saem da conta.` : ""),
+      qtd: semPreco.length,
+      exemplos: semPreco.slice(0, 5).map((l) => l.idSku),
+    });
+  }
+
   const custoZero = base.filter((l) => l.custoReposicao === 0);
-  if (custoZero.length)
-    add({ nivel: "aviso", codigo: "custo_zero", mensagem: "Linhas com custo de reposição = 0 (a valorização usa o preço de lista como fallback).", qtd: custoZero.length, exemplos: custoZero.slice(0, 5).map((l) => l.idSku) });
+  if (custoZero.length) {
+    const comLista = custoZero.filter((l) => l.precoLista > 0).length;
+    add({
+      nivel: "info",
+      codigo: "custo_zero",
+      mensagem:
+        `Linhas sem custo de reposição${comLista ? ` (${comLista} usam o preço de lista)` : ""}. Como destino não pesam: a transferência é valorizada pelo custo do CD de origem.`,
+      qtd: custoZero.length,
+      exemplos: custoZero.slice(0, 5).map((l) => l.idSku),
+    });
+  }
 
-  const semPreco = base.filter((l) => l.custoReposicao === 0 && l.precoLista === 0);
-  if (semPreco.length)
-    add({ nivel: "aviso", codigo: "sem_preco", mensagem: "Linhas sem custo E sem preço de lista: a valorização em R$ fica zero.", qtd: semPreco.length, exemplos: semPreco.slice(0, 5).map((l) => l.idSku) });
-
-  const embZero = base.filter((l) => l.embCompra <= 0);
+  const embZero = origens.filter((l) => l.embCompra <= 0);
   if (embZero.length)
-    add({ nivel: "aviso", codigo: "emb_zero", mensagem: "Linhas com embalagem de compra <= 0: a transferência em caixas fica 0.", qtd: embZero.length, exemplos: embZero.slice(0, 5).map((l) => l.idSku) });
+    add({ nivel: "aviso", codigo: "emb_zero", mensagem: "Linhas com excesso (podem ser origem) e embalagem de compra <= 0: a transferência em caixas fica 0 e a caixa fechada não se aplica.", qtd: embZero.length, exemplos: embZero.slice(0, 5).map((l) => l.idSku) });
 
   const semGiro = base.filter((l) => l.vendaMedia3m <= 0 && l.estoqueDisponivel + l.quantidadePendente > 0);
   if (semGiro.length)
