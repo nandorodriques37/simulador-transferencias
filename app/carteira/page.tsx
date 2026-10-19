@@ -5,6 +5,7 @@ import { Alert, Campo, ErroCarga, Estado, Fonte, Kpi, Kpis, Modal, PageHeader, P
 import { Icone } from "@/components/icones";
 import { fmtInt, fmtRs, fmtRsCompacto } from "@/lib/format";
 import { useApi, useDebounce } from "@/lib/useApi";
+import { enviarDireto, esquecerEnvio } from "@/lib/uploadCliente";
 
 interface Baixa { qtd: number; em: string; registradoEm: string; documento?: string }
 interface Sugestao {
@@ -18,7 +19,7 @@ interface Resumo {
   aprovadas: number; qtdAberta: number; valorAberto: number; faturadas: number; qtdFaturada: number;
   qtdNaoRefletida: number; valorNaoRefletido: number; envelhecidas: number; diasMaisAntiga: number;
 }
-interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; eventos: Evento[]; dataPosicao?: string }
+interface CarteiraResp { itens: Sugestao[]; resumo: Resumo; durable: boolean; uploadDireto?: boolean; acessoBlob?: "public" | "private"; modoUpload?: "presigned" | "token" | null; eventos: Evento[]; dataPosicao?: string }
 interface Achado { nivel: "erro" | "aviso" | "info"; mensagem: string; qtd: number; exemplos?: string[] }
 
 const nivelTom = { erro: "erro", aviso: "warn", info: "info" } as const;
@@ -85,9 +86,6 @@ export default function Carteira() {
     setEnviando(true);
     setProgresso(dryRun ? 40 : 25);
     if (dryRun) { setPrevia(null); setAchados(null); }
-    const fd = new FormData();
-    fd.append("faturamento", fatFile);
-    fd.append("dryRun", String(dryRun));
     let r: Response;
     let d: {
       erro?: string; faltando?: { rotulo: string; aliases: string[] }[];
@@ -95,7 +93,22 @@ export default function Carteira() {
       relatorio: { achados: Achado[]; baixadas: number; qtdBaixada: number };
     };
     try {
-      r = await fetch("/api/faturamento", { method: "POST", body: fd });
+      if (data.uploadDireto) {
+        // Acima de 4,5 MB o arquivo não cabe no corpo da função: vai direto
+        // ao armazenamento e a rota recebe só a URL.
+        const url = await enviarDireto(fatFile, "faturamento", (p) => setProgresso(Math.round(p * 0.7)), data.acessoBlob ?? "private", data.modoUpload === "token" ? "token" : "presigned");
+        setProgresso(75);
+        r = await fetch("/api/faturamento", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, dryRun }),
+        });
+      } else {
+        const fd = new FormData();
+        fd.append("faturamento", fatFile);
+        fd.append("dryRun", String(dryRun));
+        r = await fetch("/api/faturamento", { method: "POST", body: fd });
+      }
       setProgresso(90);
       d = await r.json();
     } catch (e) {
@@ -116,6 +129,7 @@ export default function Carteira() {
     }
     setAchados(d.relatorio.achados);
     setMsg({ tom: "good", texto: `Faturamento aplicado: ${fmtInt(d.relatorio.baixadas)} sugestão(ões) baixada(s), ${fmtInt(d.relatorio.qtdBaixada)} unidades confirmadas.` });
+    esquecerEnvio(fatFile);
     setFatFile(null);
     if (fatRef.current) fatRef.current.value = "";
     carregar();
@@ -364,7 +378,7 @@ export default function Carteira() {
           <span className="upload__ico"><Icone nome={fatFile ? "check" : "upload"} tamanho={22} /></span>
           <div className="upload__txt">
             <b>{fatFile ? fatFile.name : "Nenhum arquivo escolhido"}</b>
-            <span>{fatFile ? `${(fatFile.size / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB · pronto para validar` : "CSV, XLSX ou XLSB"}</span>
+            <span>{fatFile ? `${(fatFile.size / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB · pronto para validar` : data.uploadDireto ? "CSV, XLSX ou XLSB" : "CSV, XLSX ou XLSB · até 4,5 MB (upload direto desligado)"}</span>
           </div>
           <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => fatRef.current?.click()}>{fatFile ? "Trocar" : "Escolher arquivo"}</button>
         </div>

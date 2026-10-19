@@ -373,6 +373,13 @@ export const store = {
       .reverse();
   },
 
+  /** Tira análises excluídas da memória desta instância. */
+  esquecerAnalises(ids: string[]): void {
+    const st = getState();
+    const fora = new Set(ids);
+    st.analises = st.analises.filter((a) => !fora.has(a.id));
+  },
+
   getAnalise(id?: string): Analise | undefined {
     const st = getState();
     if (!id) return st.analises[st.analises.length - 1];
@@ -388,7 +395,10 @@ export const store = {
     | { id: string; parametros: ParametrosRede; linhas: LinhaPlano[]; meses: string[]; resultado?: ResultadoRede }
     | null
   > {
-    const emMemoria = this.getAnalise(analiseId);
+    // Sem id, vale a mais recente GUARDADA: outra instância pode ter excluído
+    // a que ainda está na memória desta.
+    const alvo = analiseId ?? (await analisesStore.ultima())?.id;
+    const emMemoria = this.getAnalise(alvo);
     if (emMemoria) {
       planosStore.cachear(emMemoria.id, emMemoria.resultado.linhas);
       return {
@@ -399,7 +409,7 @@ export const store = {
         resultado: emMemoria.resultado,
       };
     }
-    const salva = analiseId ? await analisesStore.obter(analiseId) : await analisesStore.ultima();
+    const salva = alvo ? await analisesStore.obter(alvo) : null;
     if (!salva) return null;
     const linhas = await planosStore.carregar(salva.id);
     if (!linhas) return null;

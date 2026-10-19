@@ -9,7 +9,7 @@ import { useApi, useDebounce } from "@/lib/useApi";
 
 interface LinhaPlano {
   cdOrigem: number; cdDestino: number; rota: string; codigoProduto: number; produto: string;
-  fornecedor: string; comprador: string; analista: string; categoriaN1: string;
+  fornecedor: string; comprador: string; analista: string; categoria: string;
   precoUnitario: number; embCompra: number;
   demandaMes: number[]; transfMes: number[]; demandaSaldo: number; transfSaldo: number;
   transfTotal: number; valorTotal: number; caixas: number;
@@ -266,7 +266,7 @@ function Plano() {
               {facets.destinos.map((c) => <option key={c} value={c}>CD {c}</option>)}
             </select>
           </Campo>
-          <Campo rotulo="Categoria" htmlFor="f-cat">
+          <Campo rotulo="Categoria (N3)" htmlFor="f-cat">
             <select id="f-cat" value={filtros.categoria} onChange={(e) => setF("categoria", e.target.value)} className="pgm-campo__controle">
               <option value="">Todas</option>
               {facets.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -353,7 +353,7 @@ function Plano() {
                     <td><Rota origem={l.cdOrigem} destino={l.cdDestino} /></td>
                     <td>{l.codigoProduto}</td>
                     <td className="prod" title={l.produto}>{l.produto}</td>
-                    <td className="cat prod" style={{ maxWidth: 160 }} title={l.categoriaN1}>{l.categoriaN1}</td>
+                    <td className="cat prod" style={{ maxWidth: 160 }} title={l.categoria}>{l.categoria}</td>
                     {modoPedidos
                       ? l.transfMes.map((t, i) => <td key={i} className="pgm-num">{fmtInt(t)}</td>)
                       : <td className="pgm-num">{fmtInt(l.demandaSaldo)}</td>}

@@ -9,11 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const itens = (
-    await carteira.listar({
-      status: "aprovada",
+    await carteira.listarAbertas({
       cdOrigem: sp.get("origem") ? Number(sp.get("origem")) : null,
       cdDestino: sp.get("destino") ? Number(sp.get("destino")) : null,
-      limite: 5000,
     })
   ).filter((s) => qtdAberta(s) > 0);
 

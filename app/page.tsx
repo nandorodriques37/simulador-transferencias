@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Alert, Badge, Barra, Cd, Decisao, ErroCarga, Estado, Fonte, Insight, Kpi, Kpis, PageHeader, Pill, Ressalvas, Revalidando, Rolagem, Rota, Secao, Seg, Spinner } from "@/components/ui";
+import { Alert, Badge, Barra, Cd, Decisao, ErroCarga, Estado, Fonte, Insight, Kpi, Kpis, Modal, PageHeader, Pill, Ressalvas, Revalidando, Rolagem, Rota, Secao, Seg, Spinner } from "@/components/ui";
+import { Icone } from "@/components/icones";
 import { fmtCap, fmtInt, fmtPct, fmtRs, fmtRsCompacto, rotuloMes, rotuloRota } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 
@@ -61,6 +62,8 @@ interface AnaliseHistorico {
   modoDemanda: string; origens: number[]; destinos: number[]; tempoMs: number;
   kpis: { valorTransfTotal: number; coberturaNecessidade: number; impactoFiscalTotal: number; linhasPlano: number };
   aprovado?: { linhas: number; qtd: number; valor: number; em: string };
+  /** Saldo que a análise ainda reserva na carteira (sugestões não faturadas). */
+  emAberto?: { sugestoes: number; qtd: number; valor: number } | null;
 }
 
 /** Barra de utilização de capacidade: comprometido (carteira) + usado nesta análise. */
@@ -88,6 +91,47 @@ export default function Dashboard() {
   const data = painel.data;
   const historico = hist.data?.analises ?? [];
   const duravel = !!hist.data?.duravel;
+
+  // Exclusão de análises do histórico.
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [alvo, setAlvo] = useState<string[] | null>(null);
+  const [cancelarSugestoes, setCancelarSugestoes] = useState(false);
+  const [excluindo, setExcluindo] = useState(false);
+  const [aviso, setAviso] = useState<{ tom: "good" | "erro"; texto: string } | null>(null);
+
+  const abrirExclusao = (ids: string[]) => {
+    setAlvo(ids);
+    setCancelarSugestoes(false);
+  };
+  const excluir = async () => {
+    if (!alvo?.length) return;
+    setExcluindo(true);
+    try {
+      const r = await fetch("/api/analise", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: alvo, cancelarSugestoes }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.erro ?? `falha ${r.status}`);
+      setAviso({
+        tom: "good",
+        texto:
+          `${d.excluidas} análise${d.excluidas === 1 ? "" : "s"} excluída${d.excluidas === 1 ? "" : "s"}` +
+          (d.sugestoesCanceladas > 0 ? ` · ${fmtInt(d.sugestoesCanceladas)} sugestões em aberto canceladas na carteira.` : "."),
+      });
+      setSel(new Set());
+      setAlvo(null);
+      hist.recarregar();
+      painel.recarregar();
+    } catch (e) {
+      // Nada some em silêncio: se falhou, a análise continua na lista.
+      setAviso({ tom: "erro", texto: `Não foi possível excluir: ${(e as Error).message}. Nada foi apagado.` });
+      setAlvo(null);
+    } finally {
+      setExcluindo(false);
+    }
+  };
 
   if (painel.carregando) return <Spinner label="Abrindo o dashboard…" />;
   if (painel.erro && !data) return <ErroCarga erro={painel.erro} onTentar={painel.recarregar} />;
@@ -139,6 +183,9 @@ export default function Dashboard() {
   const destinosAjustados = destinos.filter((d) => Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1).length;
   const emAberto = Math.max(0, kpis.necessidadeTotalRs - kpis.valorTransfTotal);
   const dataBase = data.analise.criadoEm ? new Date(data.analise.criadoEm).toLocaleDateString("pt-BR") : "";
+  // Unidades transferidas e nenhum real: a base entrou sem custo nem preço (ou
+  // a coluna não foi reconhecida). Sem este aviso a tela dizia "nada em aberto".
+  const semValor = kpis.qtdTransfTotal > 0 && kpis.valorTransfTotal <= 0 && kpis.necessidadeTotalRs <= 0;
 
   return (
     <>
@@ -183,8 +230,14 @@ export default function Dashboard() {
         {data.regras?.semRestricoes && <Badge tom="good">Sem restrições</Badge>}
       </div>
 
-      {(painel.erro || data.somenteResultado || (data.aprovado && data.aprovado.linhas > 0) || kpis.rotasSemAliquota.length > 0) && (
+      {(semValor || painel.erro || data.somenteResultado || (data.aprovado && data.aprovado.linhas > 0) || kpis.rotasSemAliquota.length > 0) && (
         <div className="flex flex-col gap-3">
+          {semValor && (
+            <Alert tom="erro" titulo="Análise sem valor em R$" acao={<Link href="/analise" className="pgm-botao pgm-botao--secundario">Reimportar a base</Link>}>
+              O plano tem {fmtInt(kpis.qtdTransfTotal)} un, mas tudo saiu em R$ 0: a base desta análise entrou sem custo nem preço. Confira a coluna de
+              custo na validação da importação e rode a análise de novo — os percentuais abaixo não valem.
+            </Alert>
+          )}
           {painel.erro && (
             <Alert tom="erro" titulo="Falha ao atualizar" acao={<button onClick={painel.recarregar} className="pgm-botao pgm-botao--secundario" type="button">Tentar de novo</button>}>
               {painel.erro}. Os números abaixo são da última carga bem-sucedida.
@@ -231,7 +284,7 @@ export default function Dashboard() {
             </Insight>
             <Decisao>Ampliar {artigo} {nomeGargalo} ou aceitar que {fmtRsCompacto(data.capacidade.valorBloqueado)} sigam em aberto para a próxima análise.</Decisao>
           </>
-        ) : (
+        ) : semValor ? null : (
           <Insight>
             O plano cobre <b>{fmtPct(kpis.coberturaNecessidade, 0)}</b> da necessidade com <b>{fmtPct(kpis.usoDoExcesso, 0)}</b> do excesso das origens.{" "}
             {emAberto > 0 ? <>Ficam <b>{fmtRsCompacto(emAberto)}</b> em aberto para a próxima análise.</> : "Nenhuma necessidade ficou em aberto."}
@@ -484,34 +537,148 @@ export default function Dashboard() {
 
       {/* --------------------------- Histórico --------------------------- */}
       {historico.length > 0 && (
-        <Secao flush titulo="Histórico de análises" desc="O resultado de cada rodada fica guardado: parâmetros, KPIs e o que foi aprovado">
+        <Secao
+          flush
+          id="historico"
+          titulo="Histórico de análises"
+          desc={duravel ? "O resultado de cada rodada fica guardado: parâmetros, KPIs e o que foi aprovado. Exclua as que não servem mais." : "Atenção: sem banco, o histórico fica só na memória do servidor e some em um novo deploy."}
+          right={
+            sel.size > 0 ? (
+              <>
+                <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => setSel(new Set())}>Limpar seleção</button>
+                <button type="button" className="pgm-botao pgm-botao--perigo" style={{ display: "inline-flex", alignItems: "center", gap: 8 }} onClick={() => abrirExclusao(Array.from(sel))}>
+                  <Icone nome="lixeira" tamanho={16} /> Excluir {sel.size} selecionada{sel.size === 1 ? "" : "s"}
+                </button>
+              </>
+            ) : undefined
+          }
+        >
+          {aviso && (
+            <div style={{ padding: "0 24px 16px" }}>
+              <Alert tom={aviso.tom} titulo={aviso.tom === "good" ? "Pronto" : "Falha"}>{aviso.texto}</Alert>
+            </div>
+          )}
           <Rolagem>
             <table className="pgm-tabela">
               <thead>
-                <tr><th>Análise</th><th>Rodada em</th><th>Demanda</th><th>Origens → destinos</th><th className="pgm-num">Transferido</th><th className="pgm-num">Cobertura</th><th className="pgm-num">Aprovado</th><th>Guardada</th></tr>
+                <tr>
+                  <th style={{ width: 36 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Selecionar todas as análises"
+                      checked={sel.size > 0 && sel.size === historico.length}
+                      ref={(el) => { if (el) el.indeterminate = sel.size > 0 && sel.size < historico.length; }}
+                      onChange={(e) => setSel(e.target.checked ? new Set(historico.map((h) => h.id)) : new Set())}
+                    />
+                  </th>
+                  <th>Análise</th><th>Rodada em</th><th>Origens → destinos</th><th className="pgm-num">Transferido</th><th className="pgm-num">Cobertura</th><th className="pgm-num">Na carteira</th><th aria-label="Ações" />
+                </tr>
               </thead>
               <tbody>
-                {historico.map((h) => (
-                  <tr key={h.id} className={h.id === data.analise.id ? "sel" : undefined}>
-                    <td>
-                      <b>{h.id}</b>
-                      {h.id === data.analise.id && <Badge tom="azul"><span style={{ marginLeft: 0 }}>Esta análise</span></Badge>}
-                      {h.label && <span className="sub">{h.label}</span>}
-                    </td>
-                    <td>{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
-                    <td>{h.modoDemanda === "pedidos" ? "Pedidos" : "Saldo ideal"}</td>
-                    <td>{h.origens.join(", ")} → {h.destinos.join(", ")}</td>
-                    <td className="pgm-num">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</td>
-                    <td className="pgm-num">{fmtPct(h.kpis?.coberturaNecessidade ?? 0, 0)}</td>
-                    <td className="pgm-num">{h.aprovado && h.aprovado.linhas > 0 ? fmtRsCompacto(h.aprovado.valor) : "—"}</td>
-                    <td>{duravel ? <Badge tom="good">Persistida</Badge> : <Badge tom="warn">Só em memória</Badge>}</td>
-                  </tr>
-                ))}
+                {historico.map((h) => {
+                  const semValor = (h.kpis?.linhasPlano ?? 0) > 0 && (h.kpis?.valorTransfTotal ?? 0) <= 0;
+                  return (
+                    <tr key={h.id} className={sel.has(h.id) ? "sel" : undefined}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Selecionar a análise ${h.id}`}
+                          checked={sel.has(h.id)}
+                          onChange={() => {
+                            const novo = new Set(sel);
+                            if (novo.has(h.id)) novo.delete(h.id); else novo.add(h.id);
+                            setSel(novo);
+                          }}
+                        />
+                      </td>
+                      <td>
+                        <b>{h.id}</b>
+                        {h.id === data.analise.id && <Badge tom="azul"><span style={{ marginLeft: 0 }}>Esta análise</span></Badge>}
+                        {semValor && <Badge tom="warn">Sem valor em R$</Badge>}
+                        {h.label && <span className="sub">{h.label}</span>}
+                      </td>
+                      <td>{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
+                      <td>{h.origens.join(", ")} → {h.destinos.join(", ")}</td>
+                      <td className="pgm-num">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</td>
+                      <td className="pgm-num">{fmtPct(h.kpis?.coberturaNecessidade ?? 0, 0)}</td>
+                      <td className="pgm-num" title={h.emAberto ? `${fmtInt(h.emAberto.sugestoes)} sugestões em aberto · ${fmtInt(h.emAberto.qtd)} un` : "Nada em aberto na carteira"}>
+                        {h.emAberto ? <>{fmtRsCompacto(h.emAberto.valor)}<span className="sub">{fmtInt(h.emAberto.sugestoes)} em aberto</span></> : "—"}
+                      </td>
+                      <td>
+                        <button type="button" className="btn-icone btn-icone--perigo" onClick={() => abrirExclusao([h.id])} aria-label={`Excluir a análise ${h.id}`} title="Excluir">
+                          <Icone nome="lixeira" tamanho={18} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </Rolagem>
         </Secao>
       )}
+
+      {/* ---------------------- Modal: excluir análises ---------------------- */}
+      {alvo && (() => {
+        const itens = historico.filter((h) => alvo.includes(h.id));
+        const comCarteira = itens.filter((h) => h.emAberto && h.emAberto.sugestoes > 0);
+        const sug = comCarteira.reduce((a, h) => a + (h.emAberto?.sugestoes ?? 0), 0);
+        const qtd = comCarteira.reduce((a, h) => a + (h.emAberto?.qtd ?? 0), 0);
+        const valor = comCarteira.reduce((a, h) => a + (h.emAberto?.valor ?? 0), 0);
+        const incluiAtual = alvo.includes(data.analise.id);
+        const n = alvo.length;
+        return (
+          <Modal
+            aberto
+            titulo={`Excluir ${n} análise${n === 1 ? "" : "s"}?`}
+            sub="Some do histórico o resultado (KPIs, rotas, parâmetros) e o plano por SKU guardado."
+            onFechar={() => !excluindo && setAlvo(null)}
+            largura={560}
+            rodape={
+              <>
+                <button type="button" className="pgm-botao pgm-botao--secundario" disabled={excluindo} onClick={() => setAlvo(null)}>Manter</button>
+                <button type="button" className="pgm-botao pgm-botao--perigo" disabled={excluindo} onClick={excluir}>
+                  {excluindo ? "Excluindo…" : `Excluir ${n} análise${n === 1 ? "" : "s"}`}
+                </button>
+              </>
+            }
+          >
+            <div className="mb-lista">
+              {itens.slice(0, 6).map((h) => (
+                <div key={h.id} className="mb-item">
+                  <div>
+                    <b>{h.id}{h.id === data.analise.id ? " · esta análise" : ""}</b>
+                    <span>{new Date(h.criadoEm).toLocaleString("pt-BR")} · {h.modoDemanda === "pedidos" ? "Pedidos" : "Saldo ideal"} · {h.origens.join(", ")} → {h.destinos.join(", ")}</span>
+                  </div>
+                  <span className="v">{fmtRsCompacto(h.kpis?.valorTransfTotal ?? 0)}</span>
+                </div>
+              ))}
+              {itens.length > 6 && <div className="mb-item"><div><b>Mais {itens.length - 6} análise(s)</b></div><span className="v"></span></div>}
+            </div>
+
+            {incluiAtual && (
+              <Alert tom="info" titulo="Dashboard">Esta é a análise aberta agora: o dashboard passa a mostrar a anterior.</Alert>
+            )}
+
+            {comCarteira.length > 0 ? (
+              <Alert tom="warn" titulo="Carteira">
+                {comCarteira.length === 1 ? "Esta análise ainda tem" : `${comCarteira.length} dessas análises ainda têm`}{" "}
+                <b>{fmtInt(sug)} sugestões em aberto</b> ({fmtInt(qtd)} un · {fmtRsCompacto(valor)}) reservando estoque nas origens.
+                Excluir a análise não as cancela.
+                <label className="flex items-center gap-2" style={{ marginTop: 10, fontWeight: 700, cursor: "pointer" }}>
+                  <input type="checkbox" checked={cancelarSugestoes} onChange={(e) => setCancelarSugestoes(e.target.checked)} />
+                  Cancelar também essas {fmtInt(sug)} sugestões em aberto
+                </label>
+                <span style={{ display: "block", marginTop: 6 }}>O que já foi faturado nunca é apagado.</span>
+              </Alert>
+            ) : (
+              <Alert tom="info" titulo="Carteira">Nenhuma sugestão em aberto vem dessas análises: a carteira não muda.</Alert>
+            )}
+
+            <Alert tom="warn" titulo="Sem volta">Uma análise excluída não pode ser recuperada. Para ter o resultado de novo, rode a análise outra vez.</Alert>
+          </Modal>
+        );
+      })()}
 
       <div>
         <Ressalvas

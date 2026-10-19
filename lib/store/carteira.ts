@@ -97,14 +97,57 @@ export interface FiltroCarteira {
 
 const nowIso = () => new Date().toISOString();
 
-/** Aceita ISO, dd/mm/aaaa e aaaa-mm-dd; devolve ISO ou `null`. */
-export function normalizarDataFaturamento(v?: string): string | null {
-  const t = (v ?? "").trim();
+/** Datas fora desta janela são lixo de conversão, não faturamento real. */
+const ANO_MIN = 2000;
+const ANO_MAX = 2100;
+
+/** Dia serial do Excel (dias desde 30/12/1899) → ISO ao meio-dia UTC. */
+function deSerialExcel(serial: number): string | null {
+  // 36526 = 01/01/2000; 73051 = 01/01/2100.
+  if (!(serial >= 36526 && serial < 73051)) return null;
+  const ms = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000;
+  return new Date(ms + 12 * 3600000).toISOString();
+}
+
+function deDiaMesAno(d: number, m: number, a: number): string | null {
+  if (a < 100) a += 2000;
+  if (a < ANO_MIN || a > ANO_MAX || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(a, m - 1, d, 12));
+  return dt.getUTCDate() === d ? dt.toISOString() : null;
+}
+
+/**
+ * Data do faturamento (ou da posição de estoque) → ISO, ou `null`.
+ *
+ * Aceita dd/mm/aaaa (também com `-`, `.` e ano de 2 dígitos), aaaa-mm-dd,
+ * aaaammdd, ISO completo e o **dia serial do Excel**. Este último é o caso que
+ * importa: uma célula de data em XLSX chega como número (46305). Lida como
+ * texto, ela virava o ano 46305 — o Postgres recusa a gravação no meio da baixa
+ * e, em memória, a comparação com a data da base dava o resultado errado.
+ */
+export function normalizarDataFaturamento(v?: string | number | null): string | null {
+  const t = String(v ?? "").trim();
   if (!t) return null;
-  const br = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
-  if (br) return new Date(Date.UTC(+br[3], +br[2] - 1, +br[1], 12)).toISOString();
+  if (/^\d{5}(\.\d+)?$/.test(t)) return deSerialExcel(Number(t));
+  if (/^\d{8}$/.test(t)) return deDiaMesAno(+t.slice(6, 8), +t.slice(4, 6), +t.slice(0, 4));
+  const br = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})(?!\d)/);
+  if (br) return deDiaMesAno(+br[1], +br[2], +br[3]);
+  const iso = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return deDiaMesAno(+iso[3], +iso[2], +iso[1]);
   const d = new Date(t);
-  return isNaN(d.getTime()) ? null : d.toISOString();
+  if (isNaN(d.getTime())) return null;
+  const ano = d.getUTCFullYear();
+  return ano >= ANO_MIN && ano <= ANO_MAX ? d.toISOString() : null;
+}
+
+/**
+ * Conserta baixas gravadas antes da correção acima: "+046305-01-01T…" era o
+ * serial do Excel lido como ano. Datas válidas passam intactas.
+ */
+export function repararDataBaixa(em: string): string {
+  const m = /^\+0*(\d{5})-01-01T/.exec(em);
+  if (!m) return em;
+  return deSerialExcel(Number(m[1])) ?? em;
 }
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
@@ -230,10 +273,87 @@ function daLinha(r: any): Sugestao {
     detalhe: (r.detalhe ?? {}) as Record<string, unknown>,
     status: r.status as StatusSugestao,
     qtdFaturada: Number(r.qtd_faturada),
-    baixas: (r.baixas ?? []) as Baixa[],
+    baixas: ((r.baixas ?? []) as Baixa[]).map((b) => ({ ...b, em: repararDataBaixa(b.em) })),
     faturadoEm: r.faturado_em ? new Date(r.faturado_em).toISOString() : null,
     atualizadoEm: new Date(r.atualizado_em).toISOString(),
   };
+}
+
+/** Colunas usadas no cálculo: tudo menos `detalhe`, que só a tela mostra. */
+const COLUNAS_CALCULO = `id, analise_id, criado_em, criado_por, cd_origem, cd_destino, codigo_produto,
+  produto, qtd, valor, preco, emb_compra, status, qtd_faturada, baixas, faturado_em, atualizado_em`;
+
+/** Linhas por comando no banco: grande o bastante para poucas idas, pequeno para não estourar o corpo. */
+const LOTE_SQL = 2000;
+
+const porCriacao = (a: Sugestao, b: Sugestao) =>
+  a.criadoEm < b.criadoEm ? -1 : a.criadoEm > b.criadoEm ? 1 : a.id < b.id ? -1 : 1;
+
+/**
+ * TODAS as sugestões em aberto, sem teto, da mais antiga para a mais nova.
+ *
+ * Cálculo nunca pode usar a listagem da tela: ela tem limite, e uma sugestão
+ * que fica de fora deixa de descontar a origem (o app sugere de novo o que já
+ * foi aprovado) e deixa de receber a baixa da NF.
+ */
+async function carregarAbertas(f: { cdOrigem?: number | null; cdDestino?: number | null } = {}): Promise<Sugestao[]> {
+  const pool = getPool();
+  if (pool) {
+    await ensureSchema();
+    const { rows } = await pool.query(
+      `SELECT ${COLUNAS_CALCULO} FROM sugestao_transferencia
+       WHERE status = 'aprovada'
+         AND ($1::int IS NULL OR cd_origem = $1)
+         AND ($2::int IS NULL OR cd_destino = $2)
+       ORDER BY criado_em, id`,
+      [f.cdOrigem ?? null, f.cdDestino ?? null],
+    );
+    return rows.map(daLinha);
+  }
+  return Array.from(mem().values())
+    .filter((s) => s.status === "aprovada")
+    .filter((s) => f.cdOrigem == null || s.cdOrigem === f.cdOrigem)
+    .filter((s) => f.cdDestino == null || s.cdDestino === f.cdDestino)
+    .sort(porCriacao);
+}
+
+/**
+ * Sugestões que a base de `dataBase` pode não refletir: as em aberto e as
+ * faturadas com alguma baixa posterior à base. As faturadas antes da base —
+ * a imensa maioria do histórico — nem saem do banco.
+ */
+async function carregarNaoRefletidas(dataBase: string): Promise<Sugestao[]> {
+  const pool = getPool();
+  if (pool) {
+    await ensureSchema();
+    const { rows } = await pool.query(
+      `SELECT ${COLUNAS_CALCULO} FROM sugestao_transferencia
+       WHERE status = 'aprovada'
+          OR (status = 'faturada' AND ($1 = '' OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(baixas) b
+                WHERE b->>'em' > $1 OR b->>'em' LIKE '+%')))`,
+      [dataBase],
+    );
+    return rows.map(daLinha);
+  }
+  return Array.from(mem().values()).filter((s) => s.status !== "cancelada");
+}
+
+/**
+ * Evento que já processou este conteúdo. Busca direto pela impressão: a lista
+ * da tela só traz os 50 últimos, e no banco ela nem trazia a impressão — a
+ * trava de reimportação não funcionava fora do modo memória.
+ */
+async function eventoPorImpressao(impressao: string): Promise<EventoFaturamento | null> {
+  const pool = getPool();
+  if (pool) {
+    await ensureSchema();
+    const { rows } = await pool.query(`SELECT em, por, arquivo FROM faturamento_evento WHERE impressao = $1 LIMIT 1`, [impressao]);
+    const r = rows[0];
+    if (!r) return null;
+    return { id: "", em: new Date(r.em).toISOString(), por: r.por, arquivo: r.arquivo ?? "", linhas: 0, casadas: 0, semCorrespondencia: 0, qtdBaixada: 0, impressao };
+  }
+  return memEventos().find((e) => e.impressao === impressao) ?? null;
 }
 
 // ------------------------------ API pública --------------------------------
@@ -263,7 +383,7 @@ export const carteira = {
     const em = nowIso();
 
     // Saldo em aberto por rota + produto, vindo de OUTRAS análises.
-    const existentes = await this.listar({ status: "aprovada", limite: 5000 });
+    const existentes = await carregarAbertas();
     const abertoOutras = new Map<string, number>();
     for (const s of existentes) {
       if (s.analiseId === analiseId) continue;
@@ -277,6 +397,7 @@ export const carteira = {
     let conciliadas = 0;
     let ignoradas = 0;
     const avisos: string[] = [];
+    const paraGravar: NovaSugestao[] = [];
 
     for (const it of itens) {
       const chave = `${it.cdOrigem}>${it.cdDestino}|${it.codigoProduto}`;
@@ -297,18 +418,10 @@ export const carteira = {
       }
 
       const proporcao = it.qtd > 0 ? qtd / it.qtd : 0;
-      await this.gravarSugestao(
-        {
-          ...it,
-          qtd,
-          valor: it.valor * proporcao,
-        },
-        analiseId,
-        por,
-        em,
-      );
+      paraGravar.push({ ...it, qtd, valor: it.valor * proporcao });
       gravadas++;
     }
+    await this.gravarSugestoes(paraGravar, analiseId, por, em);
 
     if (ignoradas > 0 || conciliadas > 0) {
       avisos.unshift(
@@ -320,55 +433,83 @@ export const carteira = {
 
   /** Grava (ou atualiza) uma sugestão da análise. */
   async gravarSugestao(it: NovaSugestao, analiseId: string, por: string, em: string): Promise<void> {
-    const id = idSugestao(analiseId, it.cdOrigem, it.cdDestino, it.codigoProduto);
+    await this.gravarSugestoes([it], analiseId, por, em);
+  },
+
+  /**
+   * Grava (ou atualiza) sugestões em lote. Aprovar "todas do filtro" num plano
+   * real são dezenas de milhares de linhas: uma ida ao banco por linha estoura
+   * o tempo da função.
+   */
+  async gravarSugestoes(itens: NovaSugestao[], analiseId: string, por: string, em: string): Promise<void> {
+    // Mesmo id duas vezes no lote: vale a última (o banco recusaria o lote).
+    const unicos = new Map<string, NovaSugestao>();
+    for (const it of itens) unicos.set(idSugestao(analiseId, it.cdOrigem, it.cdDestino, it.codigoProduto), it);
     const pool = getPool();
     if (pool) {
       await ensureSchema();
-      await pool.query(
-        `INSERT INTO sugestao_transferencia
-           (id, analise_id, criado_em, criado_por, cd_origem, cd_destino, codigo_produto,
-            produto, qtd, valor, preco, emb_compra, detalhe, status, qtd_faturada, atualizado_em)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'aprovada',0,$3)
-         ON CONFLICT (id) DO UPDATE SET
-           qtd = EXCLUDED.qtd,
-           valor = EXCLUDED.valor,
-           preco = EXCLUDED.preco,
-           emb_compra = EXCLUDED.emb_compra,
-           detalhe = EXCLUDED.detalhe,
-           produto = EXCLUDED.produto,
-           status = CASE WHEN sugestao_transferencia.status = 'cancelada'
-                         THEN 'aprovada' ELSE sugestao_transferencia.status END,
-           atualizado_em = EXCLUDED.criado_em`,
-        [
-          id, analiseId, em, por, it.cdOrigem, it.cdDestino, it.codigoProduto,
-          it.produto ?? "", it.qtd, it.valor, it.preco ?? 0, it.embCompra ?? 0,
-          JSON.stringify(it.detalhe ?? {}),
-        ],
-      );
+      const todos = Array.from(unicos.entries());
+      for (let i = 0; i < todos.length; i += LOTE_SQL) {
+        const lote = todos.slice(i, i + LOTE_SQL);
+        await pool.query(
+          `INSERT INTO sugestao_transferencia
+             (id, analise_id, criado_em, criado_por, cd_origem, cd_destino, codigo_produto,
+              produto, qtd, valor, preco, emb_compra, detalhe, status, qtd_faturada, atualizado_em)
+           SELECT u.id, $1, $2, $3, u.o, u.d, u.p, u.nome, u.qtd, u.valor, u.preco, u.emb, u.det::jsonb, 'aprovada', 0, $2
+           FROM unnest($4::text[], $5::int[], $6::int[], $7::bigint[], $8::text[],
+                       $9::float8[], $10::float8[], $11::float8[], $12::float8[], $13::text[])
+                AS u(id, o, d, p, nome, qtd, valor, preco, emb, det)
+           ON CONFLICT (id) DO UPDATE SET
+             qtd = EXCLUDED.qtd,
+             valor = EXCLUDED.valor,
+             preco = EXCLUDED.preco,
+             emb_compra = EXCLUDED.emb_compra,
+             detalhe = EXCLUDED.detalhe,
+             produto = EXCLUDED.produto,
+             status = CASE WHEN sugestao_transferencia.status = 'cancelada'
+                           THEN 'aprovada' ELSE sugestao_transferencia.status END,
+             atualizado_em = EXCLUDED.criado_em`,
+          [
+            analiseId, em, por,
+            lote.map(([id]) => id),
+            lote.map(([, it]) => it.cdOrigem),
+            lote.map(([, it]) => it.cdDestino),
+            lote.map(([, it]) => it.codigoProduto),
+            lote.map(([, it]) => it.produto ?? ""),
+            lote.map(([, it]) => it.qtd),
+            lote.map(([, it]) => it.valor),
+            lote.map(([, it]) => it.preco ?? 0),
+            lote.map(([, it]) => it.embCompra ?? 0),
+            lote.map(([, it]) => JSON.stringify(it.detalhe ?? {})),
+          ],
+        );
+      }
       return;
     }
     const m = mem();
-    const anterior = m.get(id);
-    m.set(id, {
-      id,
-      analiseId,
-      criadoEm: anterior?.criadoEm ?? em,
-      criadoPor: anterior?.criadoPor ?? por,
-      cdOrigem: it.cdOrigem,
-      cdDestino: it.cdDestino,
-      codigoProduto: it.codigoProduto,
-      produto: it.produto ?? "",
-      qtd: it.qtd,
-      valor: it.valor,
-      preco: it.preco ?? 0,
-      embCompra: it.embCompra ?? 0,
-      detalhe: it.detalhe ?? {},
-      status: anterior && anterior.status === "faturada" ? "faturada" : "aprovada",
-      qtdFaturada: anterior?.qtdFaturada ?? 0,
-      baixas: anterior?.baixas ?? [],
-      faturadoEm: anterior?.faturadoEm ?? null,
-      atualizadoEm: em,
-    });
+    for (const [id, it] of unicos) {
+      const anterior = m.get(id);
+      m.set(id, {
+        id,
+        analiseId,
+        criadoEm: anterior?.criadoEm ?? em,
+        criadoPor: anterior?.criadoPor ?? por,
+        cdOrigem: it.cdOrigem,
+        cdDestino: it.cdDestino,
+        codigoProduto: it.codigoProduto,
+        produto: it.produto ?? "",
+        qtd: it.qtd,
+        valor: it.valor,
+        preco: it.preco ?? 0,
+        embCompra: it.embCompra ?? 0,
+        detalhe: it.detalhe ?? {},
+        status: anterior && anterior.status === "faturada" ? "faturada" : "aprovada",
+        qtdFaturada: anterior?.qtdFaturada ?? 0,
+        baixas: anterior?.baixas ?? [],
+        faturadoEm: anterior?.faturadoEm ?? null,
+        atualizadoEm: em,
+      });
+    }
   },
 
   /** Cancela sugestões (deixam de contar como compromisso). */
@@ -397,27 +538,111 @@ export const carteira = {
     return n;
   },
 
+  /**
+   * Listagem para a TELA: filtrada no banco e com teto (padrão 500, máx. 5000).
+   * Para cálculo use `listarAbertas` — o teto aqui é de exibição, não de regra.
+   */
   async listar(f: FiltroCarteira = {}): Promise<Sugestao[]> {
     const limite = Math.min(f.limite ?? 500, 5000);
+    const status = f.status ?? "aprovada";
+    const q = (f.q ?? "").toString().trim().toLowerCase();
+    const cdO = f.cdOrigem == null ? null : Number(f.cdOrigem);
+    const cdD = f.cdDestino == null ? null : Number(f.cdDestino);
     const pool = getPool();
-    let itens: Sugestao[];
     if (pool) {
       await ensureSchema();
       const { rows } = await pool.query(
-        `SELECT * FROM sugestao_transferencia ORDER BY criado_em DESC LIMIT 5000`,
+        `SELECT * FROM sugestao_transferencia
+         WHERE ($1 = 'todas' OR status = $1)
+           AND ($2::int IS NULL OR cd_origem = $2)
+           AND ($3::int IS NULL OR cd_destino = $3)
+           AND ($4 = '' OR lower(codigo_produto::text || ' ' || coalesce(produto, '')) LIKE '%' || $4 || '%')
+         ORDER BY criado_em DESC, id
+         LIMIT $5`,
+        [status, cdO, cdD, q, limite],
       );
-      itens = rows.map(daLinha);
-    } else {
-      itens = Array.from(mem().values()).sort((a, b) => (a.criadoEm < b.criadoEm ? 1 : -1));
+      return rows.map(daLinha);
     }
-    const status = f.status ?? "aprovada";
-    const q = (f.q ?? "").toString().trim().toLowerCase();
-    return itens
+    return Array.from(mem().values())
+      .sort((a, b) => -porCriacao(a, b))
       .filter((s) => (status === "todas" ? true : s.status === status))
-      .filter((s) => (f.cdOrigem == null ? true : s.cdOrigem === Number(f.cdOrigem)))
-      .filter((s) => (f.cdDestino == null ? true : s.cdDestino === Number(f.cdDestino)))
+      .filter((s) => (cdO == null ? true : s.cdOrigem === cdO))
+      .filter((s) => (cdD == null ? true : s.cdDestino === cdD))
       .filter((s) => (q ? `${s.codigoProduto} ${s.produto}`.toLowerCase().includes(q) : true))
       .slice(0, limite);
+  },
+
+  /** Todas as sugestões em aberto, sem teto (ordem de transferência, cálculos). */
+  async listarAbertas(f: { cdOrigem?: number | null; cdDestino?: number | null } = {}): Promise<Sugestao[]> {
+    return carregarAbertas(f);
+  },
+
+  /**
+   * Todas as sugestões aprovadas a partir de `desde` (qualquer status), sem
+   * teto — base do acompanhamento aprovado × faturado.
+   */
+  async listarPeriodo(f: { desde?: string | null; cdOrigem?: number | null; cdDestino?: number | null } = {}): Promise<Sugestao[]> {
+    const pool = getPool();
+    if (pool) {
+      await ensureSchema();
+      const { rows } = await pool.query(
+        `SELECT ${COLUNAS_CALCULO} FROM sugestao_transferencia
+         WHERE ($1::timestamptz IS NULL OR criado_em >= $1)
+           AND ($2::int IS NULL OR cd_origem = $2)
+           AND ($3::int IS NULL OR cd_destino = $3)`,
+        [f.desde ?? null, f.cdOrigem ?? null, f.cdDestino ?? null],
+      );
+      return rows.map(daLinha);
+    }
+    return Array.from(mem().values())
+      .filter((s) => !f.desde || s.criadoEm >= f.desde)
+      .filter((s) => f.cdOrigem == null || s.cdOrigem === f.cdOrigem)
+      .filter((s) => f.cdDestino == null || s.cdDestino === f.cdDestino);
+  },
+
+  /** Saldo em aberto que cada análise ainda tem na carteira. */
+  async abertasPorAnalise(): Promise<Map<string, { sugestoes: number; qtd: number; valor: number }>> {
+    const out = new Map<string, { sugestoes: number; qtd: number; valor: number }>();
+    for (const s of await carregarAbertas()) {
+      const aberto = qtdAberta(s);
+      if (aberto <= 0) continue;
+      const a = out.get(s.analiseId) ?? { sugestoes: 0, qtd: 0, valor: 0 };
+      a.sugestoes++;
+      a.qtd += aberto;
+      a.valor += aberto * s.preco;
+      out.set(s.analiseId, a);
+    }
+    return out;
+  },
+
+  /**
+   * Cancela o que ainda está em aberto das sugestões destas análises. Faturadas
+   * não mudam; faturadas em parte mantêm a baixa e só o saldo deixa de valer.
+   */
+  async cancelarDasAnalises(analiseIds: string[], por: string): Promise<number> {
+    if (!analiseIds.length) return 0;
+    const alvo = new Set(analiseIds);
+    const ids = (await carregarAbertas()).filter((s) => alvo.has(s.analiseId)).map((s) => s.id);
+    return ids.length ? this.cancelar(ids, por) : 0;
+  },
+
+  /** Rota + produto (`"10>1|123"`) já levados à carteira por uma análise. */
+  async chavesDaAnalise(analiseId: string): Promise<Set<string>> {
+    const pool = getPool();
+    if (pool) {
+      await ensureSchema();
+      const { rows } = await pool.query(
+        `SELECT cd_origem, cd_destino, codigo_produto FROM sugestao_transferencia
+         WHERE analise_id = $1 AND status <> 'cancelada'`,
+        [analiseId],
+      );
+      return new Set(rows.map((r: any) => `${Number(r.cd_origem)}>${Number(r.cd_destino)}|${Number(r.codigo_produto)}`));
+    }
+    return new Set(
+      Array.from(mem().values())
+        .filter((s) => s.analiseId === analiseId && s.status !== "cancelada")
+        .map((s) => `${s.cdOrigem}>${s.cdDestino}|${s.codigoProduto}`),
+    );
   },
 
   /**
@@ -436,7 +661,7 @@ export const carteira = {
    */
   async compromissos(dataBase = ""): Promise<Compromissos> {
     const c = compromissosVazios();
-    const todas = await this.listar({ status: "todas", limite: 5000 });
+    const todas = await carregarNaoRefletidas(dataBase);
     for (const s of todas) {
       const saldo = qtdNaoRefletida(s, dataBase);
       if (saldo <= 0) continue;
@@ -465,7 +690,7 @@ export const carteira = {
     envelhecidas: number;
     diasMaisAntiga: number;
   }> {
-    const todas = await this.listar({ status: "todas", limite: 5000 });
+    const todas = await carregarNaoRefletidas(dataBase);
     const agora = Date.now();
     let qtdAb = 0;
     let valorAb = 0;
@@ -476,6 +701,21 @@ export const carteira = {
     let valorNaoRefl = 0;
     let envelhecidas = 0;
     let diasMaisAntiga = 0;
+    // Faturadas são histórico e crescem sem parar: só os totais saem do banco.
+    const pool = getPool();
+    if (pool) {
+      const { rows } = await pool.query(
+        `SELECT count(*) FILTER (WHERE status = 'faturada') AS n, coalesce(sum(qtd_faturada), 0) AS q
+         FROM sugestao_transferencia`,
+      );
+      faturadas = Number(rows[0]?.n ?? 0);
+      qtdFat = Number(rows[0]?.q ?? 0);
+    } else {
+      for (const s of mem().values()) {
+        if (s.status === "faturada") faturadas++;
+        qtdFat += s.qtdFaturada;
+      }
+    }
     for (const s of todas) {
       if (s.status === "aprovada") {
         aprovadas++;
@@ -488,8 +728,6 @@ export const carteira = {
           if (dias >= 30) envelhecidas++;
         }
       }
-      if (s.status === "faturada") faturadas++;
-      qtdFat += s.qtdFaturada;
       const nr = qtdNaoRefletida(s, dataBase);
       qtdNaoRefl += nr;
       valorNaoRefl += nr * s.preco;
@@ -520,8 +758,7 @@ export const carteira = {
     // Trava de reimportação: o mesmo arquivo processado duas vezes baixaria o
     // dobro e liberaria compromisso que ninguém faturou.
     if (impressao) {
-      const anteriores = await this.eventos();
-      const repetido = anteriores.find((e) => e.impressao === impressao);
+      const repetido = await eventoPorImpressao(impressao);
       if (repetido) {
         return {
           linhas: linhas.length,
@@ -543,9 +780,7 @@ export const carteira = {
       }
     }
 
-    const abertas = (await this.listar({ status: "aprovada", limite: 5000 }))
-      .filter((s) => qtdAberta(s) > 0)
-      .sort((a, b) => (a.criadoEm < b.criadoEm ? -1 : 1));
+    const abertas = (await carregarAbertas()).filter((s) => qtdAberta(s) > 0);
 
     const porChave = new Map<string, Sugestao[]>();
     for (const s of abertas) {
@@ -561,6 +796,8 @@ export const carteira = {
     let qtdBaixada = 0;
     let quantidadeTotal = 0;
     let documentosRepetidos = 0;
+    let datasNaoReconhecidas = 0;
+    const exemplosData: string[] = [];
 
     for (const f of linhas) {
       quantidadeTotal += f.quantidade;
@@ -568,7 +805,12 @@ export const carteira = {
       const chave = `${f.cdOrigem}>${f.cdDestino}|${f.codigoProduto}`;
       const fila = porChave.get(chave) ?? [];
       const doc = (f.documento ?? "").trim();
-      const dataFat = normalizarDataFaturamento(f.data) ?? agora;
+      const dataLida = normalizarDataFaturamento(f.data);
+      if (!dataLida && (f.data ?? "").trim()) {
+        datasNaoReconhecidas++;
+        if (exemplosData.length < 5) exemplosData.push(String(f.data));
+      }
+      const dataFat = dataLida ?? agora;
 
       // Mesmo documento já lançado nesta rota + produto: linha repetida.
       if (doc && fila.some((s) => (s.baixas ?? []).some((b) => b.documento === doc))) {
@@ -597,23 +839,6 @@ export const carteira = {
       }
     }
 
-    // Grava as alterações.
-    const pool = getPool();
-    if (pool) {
-      await ensureSchema();
-      for (const s of alterados.values()) {
-        await pool.query(
-          `UPDATE sugestao_transferencia
-           SET qtd_faturada = $2, status = $3, faturado_em = $4, baixas = $5, atualizado_em = now()
-           WHERE id = $1`,
-          [s.id, s.qtdFaturada, s.status, s.faturadoEm, JSON.stringify(s.baixas ?? [])],
-        );
-      }
-    } else {
-      const m = mem();
-      for (const s of alterados.values()) m.set(s.id, s);
-    }
-
     const evento: EventoFaturamento = {
       id: uid("fat"),
       em: agora,
@@ -625,13 +850,57 @@ export const carteira = {
       qtdBaixada,
       impressao,
     };
+
+    // Grava tudo numa transação: baixas e evento entram juntos ou nada entra.
+    // Antes, uma falha no meio deixava baixas gravadas sem o evento — e a
+    // reimportação do mesmo arquivo, sem impressão registrada, baixava de novo.
+    const pool = getPool();
     if (pool) {
-      await pool.query(
-        `INSERT INTO faturamento_evento (id, em, por, arquivo, linhas, casadas, sem_correspondencia, qtd_baixada, impressao)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [evento.id, evento.em, evento.por, evento.arquivo, evento.linhas, evento.casadas, evento.semCorrespondencia, evento.qtdBaixada, evento.impressao ?? null],
-      );
+      await ensureSchema();
+      const cli = await pool.connect();
+      try {
+        await cli.query("BEGIN");
+        const todos = Array.from(alterados.values());
+        for (let i = 0; i < todos.length; i += LOTE_SQL) {
+          const lote = todos.slice(i, i + LOTE_SQL);
+          await cli.query(
+            `UPDATE sugestao_transferencia AS s
+             SET qtd_faturada = u.qf, status = u.st, faturado_em = u.fe::timestamptz,
+                 baixas = u.bx::jsonb, atualizado_em = now()
+             FROM unnest($1::text[], $2::float8[], $3::text[], $4::text[], $5::text[]) AS u(id, qf, st, fe, bx)
+             WHERE s.id = u.id`,
+            [
+              lote.map((x) => x.id),
+              lote.map((x) => x.qtdFaturada),
+              lote.map((x) => x.status),
+              lote.map((x) => x.faturadoEm),
+              lote.map((x) => JSON.stringify(x.baixas ?? [])),
+            ],
+          );
+        }
+        await cli.query(
+          `INSERT INTO faturamento_evento (id, em, por, arquivo, linhas, casadas, sem_correspondencia, qtd_baixada, impressao)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [evento.id, evento.em, evento.por, evento.arquivo, evento.linhas, evento.casadas, evento.semCorrespondencia, evento.qtdBaixada, evento.impressao ?? null],
+        );
+        await cli.query("COMMIT");
+      } catch (e) {
+        await cli.query("ROLLBACK").catch(() => undefined);
+        // Duas importações do mesmo arquivo ao mesmo tempo: a segunda esbarra
+        // no índice único da impressão e nada dela é gravado.
+        if ((e as { code?: string }).code === "23505" && impressao) {
+          return {
+            linhas: linhas.length, quantidadeTotal: 0, baixadas: 0, qtdBaixada: 0, semCorrespondencia: [], ok: false,
+            achados: [{ nivel: "erro", codigo: "faturamento_repetido", mensagem: "Este arquivo acabou de ser importado por outra pessoa — nada foi alterado.", qtd: 1 }],
+          };
+        }
+        throw e;
+      } finally {
+        cli.release();
+      }
     } else {
+      const m = mem();
+      for (const s of alterados.values()) m.set(s.id, s);
       memEventos().unshift(evento);
     }
 
@@ -644,6 +913,14 @@ export const carteira = {
         codigo: "documento_repetido",
         mensagem: "Linhas com documento já lançado anteriormente foram ignoradas (não baixam duas vezes).",
         qtd: documentosRepetidos,
+      });
+    if (datasNaoReconhecidas > 0)
+      achados.push({
+        nivel: "aviso",
+        codigo: "data_nao_reconhecida",
+        mensagem: "Data do faturamento não reconhecida: essas linhas usaram a data de hoje. Confira o formato (dd/mm/aaaa).",
+        qtd: datasNaoReconhecidas,
+        exemplos: exemplosData,
       });
     if (semCorrespondencia.length)
       achados.push({
@@ -671,6 +948,7 @@ export const carteira = {
         casadas: Number(r.casadas),
         semCorrespondencia: Number(r.sem_correspondencia),
         qtdBaixada: Number(r.qtd_baixada),
+        impressao: r.impressao ?? undefined,
       }));
     }
     return memEventos().slice(0, 50);

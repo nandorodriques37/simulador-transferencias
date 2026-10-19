@@ -3,6 +3,7 @@ import { store } from "@/lib/store";
 import { getUsuario } from "@/lib/auth";
 import { lerPlanilha } from "@/lib/data/planilha";
 import { normalizarDataFaturamento } from "@/lib/store/carteira";
+import { baixarUpload, limparUploads } from "@/lib/data/upload";
 import { parseBase, parsePedidos } from "@/lib/data/parse";
 import { validarImportacao } from "@/lib/data/validate";
 import { LinhaBase, PedidoProjetado } from "@/lib/engine/types";
@@ -17,28 +18,22 @@ export const maxDuration = 60;
  *   - "pedidos" → pedidos projetados (usados no modo Pedidos).
  * `dryRun=true` só valida e devolve a prévia, sem trocar a base.
  */
-/** Baixa um arquivo já enviado ao armazenamento e o devolve como File. */
-async function baixar(url: string, nomePadrao: string): Promise<File> {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`não foi possível ler o arquivo enviado (${resp.status})`);
-  const nome = decodeURIComponent(new URL(url).pathname.split("/").pop() || nomePadrao);
-  return new File([await resp.arrayBuffer()], nome);
-}
-
 export async function POST(req: NextRequest) {
   // Dois caminhos: arquivo no corpo (até 4,5 MB) ou URL de um upload direto.
   let baseFile: File | null = null;
   let pedidosFile: File | null = null;
   let dryRun = false;
   let dataPosicao = "";
+  let urls: (string | undefined)[] = [];
 
   if (req.headers.get("content-type")?.includes("application/json")) {
     const body = (await req.json()) as { baseUrl?: string; pedidosUrl?: string; dryRun?: boolean; dataPosicao?: string };
     dryRun = body.dryRun === true;
     dataPosicao = body.dataPosicao ?? "";
     try {
-      if (body.baseUrl) baseFile = await baixar(body.baseUrl, "base.csv");
-      if (body.pedidosUrl) pedidosFile = await baixar(body.pedidosUrl, "pedidos.csv");
+      urls = [body.baseUrl, body.pedidosUrl];
+      if (body.baseUrl) baseFile = await baixarUpload(body.baseUrl, "base.csv");
+      if (body.pedidosUrl) pedidosFile = await baixarUpload(body.pedidosUrl, "pedidos.csv");
     } catch (e) {
       return NextResponse.json({ erro: (e as Error).message }, { status: 400 });
     }
@@ -100,5 +95,7 @@ export async function POST(req: NextRequest) {
     relatorio,
     iso,
   );
+  // O arquivo cru já virou insumo normalizado: não precisa ficar no Blob.
+  await limparUploads(urls);
   return NextResponse.json({ ok: true, log, dataset: store.getDataset(), parametros: store.getParametros(), relatorio });
 }

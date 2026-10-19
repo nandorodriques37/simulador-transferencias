@@ -164,11 +164,13 @@ latin1 é detectado automaticamente.
 | Código do produto (`CodsemDv`) | `codigoProduto` | ✅ |
 | Estoque disponível | `estoqueDisponivel` | ✅ |
 | Estoque objetivo | `estoqueObjetivo` | ✅ |
-| Venda média 3 meses | `vendaMedia3m` | ✅ |
+| Venda média 3 meses (**média mensal**) | `vendaMedia3m` | ✅ |
 | Quantidade pendente | `quantidadePendente` | — |
-| Custo de reposição / Preço de lista | `custoReposicao` / `precoLista` | — |
-| Embalagem de compra | `embCompra` | — |
-| Fornecedor · comprador · analista · categorias N1–N4 | — | — |
+| Custo de reposição (`custo`, `custo_reposicao`…) / Preço de lista | `custoReposicao` / `precoLista` | — |
+| Embalagem de compra (`embalagem`, `emb_compra`…) | `embCompra` | — |
+| Descrição do produto (`produto`, `descricao`, `descricao_produto`) | `produto` | ✅ |
+| Categoria N3 (`categoria_n3`, `CAT_NÍVEL_3`, `categoria`) | `categoriaN3` | ✅ — é a categoria exibida e filtrada no plano |
+| Fornecedor · comprador · analista · categorias N1, N2, N4 | — | — |
 | Unidades por palete | `unidadesPorPalete` | — (só para capacidade em paletes) |
 | Peso unitário (kg) | `pesoUnitario` | — (só para capacidade em peso) |
 | Cubagem unitária (m³) | `cubagemUnitaria` | — (só para capacidade em volume) |
@@ -186,6 +188,12 @@ latin1 é detectado automaticamente.
 (opcional) documento/NF e data. O casamento é por **rota + produto**, na ordem
 de aprovação, com baixa parcial quando a quantidade faturada é menor que a
 aprovada. Linhas sem sugestão correspondente são listadas, e não alteram nada.
+
+A data aceita `dd/mm/aaaa` (também com `-` ou `.`), `aaaa-mm-dd`, `aaaammdd` e
+a **célula de data do Excel** (que chega como número, ex.: `46280`). Data que
+não é reconhecida usa a data do processamento e aparece como aviso na prévia.
+A baixa grava tudo numa transação: ou entram todas as baixas e o registro da
+importação, ou nada entra.
 
 ---
 
@@ -230,6 +238,10 @@ Nenhum dos dois casos exige disciplina do operador: a trava é do app.
   acontecer, cancelar devolve o volume à próxima análise.
 - O armazenamento **limpa o que sai da janela** (datasets e planos antigos), em
   vez de crescer para sempre.
+- **A carteira não tem teto no cálculo.** Compromissos, resumo, baixa por NF e
+  ordem de transferência usam todas as sugestões em aberto — só a lista da tela
+  é paginada. Aprovação e baixa gravam em lote (60 mil linhas: ~2 s para aprovar,
+  ~4 s para baixar, medido em Postgres).
 
 ## 🔄 Como uma sugestão caminha
 
@@ -270,6 +282,21 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 4. **Carteira** — sugestões em aberto e faturadas, cancelamento, **modal de
    importação do faturamento** (com prévia) e geração da **ordem de
    transferência** para ERP/WMS com o saldo em aberto.
+   No dashboard, o **histórico de análises** permite excluir uma ou várias
+   (seleção em lote). A confirmação lista o que sai, avisa se é a análise
+   aberta e mostra quantas sugestões em aberto cada uma ainda tem na carteira —
+   com a opção de cancelá-las junto (desligada por padrão). Excluir apaga o
+   resultado e o plano guardado; faturamento já registrado nunca é apagado.
+5. **Acompanhamento** — o que foi aprovado virou NF, e em quanto tempo:
+   - **aprovado × faturado** por rota, por CD de origem e por CD de destino, em
+     R$ ou unidades: `aprovado = faturado + em aberto + cancelado`, e o
+     atendimento é `faturado ÷ (aprovado − cancelado)`;
+   - **tempo da aprovação até a NF**: mediana, média e P90, com o volume em
+     faixas (até 7, 8–15, 16–30, mais de 30 dias). Cada NF pesa pela quantidade
+     faturada — a mediana diz "metade do volume faturou em até N dias";
+   - **saldo em aberto por idade**, com alerta para o que passou de 30 dias.
+
+   O período (30, 90, 180 dias ou tudo) filtra pela data de aprovação.
 
 ---
 
@@ -310,11 +337,20 @@ que ela sai de cena, o app trabalha com 325 MB.
 ### Upload de arquivo grande
 
 O corpo de uma função serverless no Vercel não passa de **4,5 MB**, e a base real
-tem dezenas de MB. Com `BLOB_READ_WRITE_TOKEN` configurado, a tela envia o
+tem dezenas de MB. Com um Blob store conectado ao projeto, a tela envia o
 arquivo **direto do navegador para o Vercel Blob** e a importação recebe só a
 URL — o arquivo nunca atravessa a função. Sem o token, o app cai no upload
 tradicional (que funciona local e para arquivos pequenos) e a tela avisa qual
 caminho está ativo.
+
+Vale para as três planilhas — base, pedidos **e faturamento**. Detalhes:
+
+- o arquivo sobe **uma vez** — *Validar* e depois *Importar* reaproveitam o envio;
+- acima de 32 MB o envio vai em partes paralelas, com nova tentativa por parte;
+- CSV, XLSX e XLSB são aceitos (o tipo é reconhecido pelo conteúdo);
+- o arquivo cru é **apagado** depois da importação; o que foi validado e nunca
+  importado é apagado em 24 h;
+- a importação só aceita URL do próprio Blob, na pasta `upload/`.
 
 Números medidos com 300 mil linhas (CSV de 54 MB): importação em ~4 s, e o
 insumo normalizado ocupa **2,1 MB** no armazenamento.
@@ -340,11 +376,21 @@ npm run dev        # http://localhost:3000
    **resultado das análises** (`analise_resultado`) — as tabelas são criadas sob
    demanda.
 
-3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store e conecte ao
-   projeto; `BLOB_READ_WRITE_TOKEN` é injetada automaticamente. É o que
-   habilita o **upload direto** (arquivos acima de 4,5 MB) e o que faz o insumo
-   sobreviver à troca de instância. Sem ele, o app grava em `.data/` no disco
-   local — bom para desenvolvimento, efêmero no serverless.
+3. **Armazenamento de arquivos (Vercel Blob):** crie um Blob store com acesso
+   **Private** e conecte ao projeto. Lojas novas autenticam por **OIDC**: o
+   Vercel injeta só `BLOB_STORE_ID`, e o upload direto usa URL pré-assinada
+   emitida pelo servidor. Lojas antigas, com `BLOB_READ_WRITE_TOKEN`, seguem
+   funcionando pelo token de cliente. É o que habilita o **upload direto** (arquivos acima de
+   4,5 MB) e o que faz o insumo sobreviver à troca de instância. Sem ele, o app
+   grava em `.data/` no disco local — bom para desenvolvimento, efêmero no
+   serverless.
+
+   > **Por que privado.** A base traz estoque e custo de todos os CDs. Numa loja
+   > pública, qualquer pessoa com a URL de um arquivo lê o conteúdo. Na privada,
+   > toda leitura exige o token, que só o servidor tem. O acesso é escolhido na
+   > criação da loja e não muda depois; o app usa privado por padrão. Uma loja
+   > pública já existente só funciona com `BLOB_ACESSO=public` — prefira criar
+   > outra, privada.
 
    Sem banco **e** sem Blob, tudo roda em memória: útil para avaliar, mas a tela
    sinaliza o estado e nada sobrevive a um novo deploy.
@@ -354,7 +400,9 @@ npm run dev        # http://localhost:3000
    | Variável | Para quê |
    |---|---|
    | `POSTGRES_URL` / `DATABASE_URL` | carteira e resultados das análises |
-   | `BLOB_READ_WRITE_TOKEN` | upload direto e insumo durável |
+   | `BLOB_STORE_ID` | loja do Blob conectada por OIDC (lojas novas) |
+   | `BLOB_READ_WRITE_TOKEN` | loja do Blob com token fixo (lojas antigas) |
+   | `BLOB_ACESSO` | `public` só para uma loja pública antiga (padrão: privada) |
    | `DADOS_DIR` | pasta local do armazenamento em disco (padrão `.data`) |
    | `DEMO_DATA` | `1` força a base de exemplo; `0` desliga em qualquer ambiente |
 
@@ -380,8 +428,10 @@ app/                   Telas + rotas de API
   analise/             Nova análise (bases, sequências, parâmetros)
   plano/               Plano de transferência + aprovação
   carteira/            Sugestões aprovadas + faturamento + ordem ERP
+  acompanhamento/      Aprovado × faturado e prazo até a NF
   api/                 status · cds · params · import · importlog · analise ·
-                       dashboard · plano[/export] · carteira[/ordem] · faturamento
+                       dashboard · plano[/export] · carteira[/ordem] · faturamento ·
+                       acompanhamento
 lib/engine/            Motor de rede (puro) + tipos + testes
 lib/data/              Esquemas, parsing, validação, leitura de planilha, seed
 lib/query/             Filtro/paginação/agregação server-side

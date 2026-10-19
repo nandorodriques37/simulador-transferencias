@@ -6,6 +6,7 @@ import { Alert, Badge, Campo, Chave, ErroCarga, Fonte, PageHeader, Progress, Rol
 import { Icone } from "@/components/icones";
 import { CdInfo, SequenciaCds } from "@/components/SequenciaCds";
 import { fmtInt, fmtRsCompacto, rotuloMes } from "@/lib/format";
+import { enviarDireto, esquecerEnvio, type ModoUpload } from "@/lib/uploadCliente";
 
 type ModoDemanda = "saldo_ideal" | "pedidos";
 
@@ -71,6 +72,8 @@ export default function NovaAnalise() {
   const [rodando, setRodando] = useState(false);
   const [limitarRota, setLimitarRota] = useState(false);
   const [uploadDireto, setUploadDireto] = useState(false);
+  const [acessoBlob, setAcessoBlob] = useState<"public" | "private">("private");
+  const [modoUpload, setModoUpload] = useState<ModoUpload>("presigned");
   const [dataPosicao, setDataPosicao] = useState("");
   const [resultadosDuraveis, setResultadosDuraveis] = useState(false);
   const [erroCarga, setErroCarga] = useState<string | null>(null);
@@ -97,6 +100,8 @@ export default function NovaAnalise() {
         setParams(d.parametros);
         setDataset(d.dataset);
         setUploadDireto(!!d.armazenamento?.uploadDireto);
+        setAcessoBlob(d.armazenamento?.acesso === "public" ? "public" : "private");
+        setModoUpload(d.armazenamento?.modoUpload === "token" ? "token" : "presigned");
         setResultadosDuraveis(!!d.resultados?.duravel);
       })
       // O status é o que sustenta a tela inteira: sem ele não há o que mostrar.
@@ -164,17 +169,11 @@ export default function NovaAnalise() {
     if (uploadDireto) {
       // Arquivo grande não cabe no corpo de uma função serverless (4,5 MB): vai
       // direto do navegador para o armazenamento e a importação recebe a URL.
-      const { upload } = await import("@vercel/blob/client");
-      const enviar = async (f: File, prefixo: string) => {
-        const blob = await upload(`upload/${prefixo}-${Date.now()}-${f.name}`, f, {
-          access: "public",
-          handleUploadUrl: "/api/blob/upload",
-          onUploadProgress: ({ percentage }) => setProgresso(Math.round(percentage * 0.7)),
-        });
-        return blob.url;
-      };
-      const baseUrl = baseFile ? await enviar(baseFile, "base") : undefined;
-      const pedidosUrl = pedFile ? await enviar(pedFile, "pedidos") : undefined;
+      // Base e pedidos dividem a barra: cada um ocupa sua metade dos 70%.
+      const peso = baseFile && pedFile ? 0.35 : 0.7;
+      const baseUrl = baseFile ? await enviarDireto(baseFile, "base", (p) => setProgresso(Math.round(p * peso)), acessoBlob, modoUpload) : undefined;
+      const inicio = baseFile ? Math.round(100 * peso) : 0;
+      const pedidosUrl = pedFile ? await enviarDireto(pedFile, "pedidos", (p) => setProgresso(inicio + Math.round(p * peso)), acessoBlob, modoUpload) : undefined;
       setProgresso(75);
       r = await fetch("/api/import", {
         method: "POST",
@@ -196,6 +195,7 @@ export default function NovaAnalise() {
     setRelatorio(d.relatorio ?? { baseLinhas: 0, pedidosLinhas: 0, cdsBase: [], achados: [{ nivel: "erro", codigo: "x", mensagem: d.erro, qtd: 0 }], ok: false });
     if (!dryRun && r.ok) {
       setMsg({ tom: "good", texto: `Bases atualizadas: ${fmtInt(d.dataset.baseLinhas)} linhas · ${d.dataset.cds.length} CDs.` });
+      esquecerEnvio(baseFile); esquecerEnvio(pedFile);
       setBaseFile(null); setPedFile(null);
       if (baseRef.current) baseRef.current.value = "";
       if (pedRef.current) pedRef.current.value = "";
@@ -354,7 +354,11 @@ export default function NovaAnalise() {
                     </div>
                     <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => baseRef.current?.click()}>{baseFile ? "Trocar" : "Escolher arquivo"}</button>
                   </div>
-                  <span className="pgm-campo__ajuda">CD · código do produto · estoque disponível · estoque objetivo · quantidade pendente · venda média 3m · custo ou preço · embalagem.{dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}</span>
+                  <span className="pgm-campo__ajuda">
+                    <b>Obrigatórias:</b> CD · código do produto · descrição do produto · categoria N3 · estoque disponível · estoque objetivo · venda média 3m (média mensal dos 3 meses).{" "}
+                    <b>Recomendadas:</b> quantidade pendente · custo · embalagem.
+                    {dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}
+                  </span>
                 </div>
                 <div className="pgm-campo" style={{ gap: 8 }}>
                   <span className="pgm-campo__rotulo">Base de pedidos · para o modo pedidos</span>

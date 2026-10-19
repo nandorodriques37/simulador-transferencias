@@ -21,6 +21,7 @@ const ITENS: Item[] = [
   { href: "/analise", label: "Nova análise", curto: "Análise", icone: "analise", grupo: "Análise" },
   { href: "/plano", label: "Plano de transferência", curto: "Plano", icone: "plano", grupo: "Execução" },
   { href: "/carteira", label: "Carteira", curto: "Carteira", icone: "carteira", grupo: "Execução" },
+  { href: "/acompanhamento", label: "Acompanhamento", curto: "Acompanhar", icone: "acompanhamento", grupo: "Execução" },
 ];
 
 /** O que a casca lê de /api/status para o topo e o contador da Carteira. */
@@ -28,6 +29,7 @@ interface Status {
   dataset?: { pronto?: boolean; demo?: boolean; dataPosicao?: string };
   resultados?: { duravel?: boolean };
   carteira?: { envelhecidas?: number; durable?: boolean };
+  versao?: string;
 }
 
 function ativo(path: string, href: string) {
@@ -116,6 +118,7 @@ export function Casca({ children }: { children: ReactNode }) {
 
   const atual = ITENS.find((it) => ativo(path, it.href)) ?? ITENS[0];
   const envelhecidas = status.data?.carteira?.envelhecidas ?? 0;
+  const versao = status.data?.versao ?? "";
   const ds = status.data?.dataset;
   const duravel = status.data?.resultados?.duravel ?? true;
   const dataBase = fmtData(ds?.dataPosicao);
@@ -134,8 +137,9 @@ export function Casca({ children }: { children: ReactNode }) {
       <nav className="app-rail" aria-label="Navegação principal">
         <Marca />
         <Itens path={path} envelhecidas={envelhecidas} />
-        <div className="app-rail__fim">
+        <div className="app-rail__fim" style={{ flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
           <span>{estado || "Carregando…"}</span>
+          {versao && <span style={{ opacity: 0.7 }}>Versão {versao}</span>}
         </div>
       </nav>
 
@@ -166,6 +170,7 @@ export function Casca({ children }: { children: ReactNode }) {
             </div>
             <div className="app-rail__fim" style={{ flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
               <span>{estado}</span>
+              {versao && <span style={{ opacity: 0.7 }}>Versão {versao}</span>}
             </div>
           </nav>
         </>

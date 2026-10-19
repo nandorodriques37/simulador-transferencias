@@ -346,7 +346,7 @@ table.pgm-tabela { width: 100%; border-collapse: separate; border-spacing: 0; fo
 .app-tema span[aria-pressed="true"] { background: var(--primaria); color: #fff; }
 
 .app-pagina { padding: 32px 40px 40px; display: flex; flex-direction: column; gap: 32px; max-width: 1600px; width: 100%; box-sizing: border-box; }
-.app-acoes { display: flex; gap: 10px; flex: none; align-items: center; }
+.app-acoes { display: flex; flex-wrap: wrap; gap: 10px; flex: none; align-items: center; max-width: 100%; }
 
 /* Cartão e cabeçalho de cartão */
 .app-card { background: var(--papel); border: 1px solid var(--linha); border-radius: var(--raio); box-shadow: var(--sombra-1); padding: 20px 24px 22px; min-width: 0; }
@@ -740,7 +740,7 @@ select.pgm-campo__controle { appearance: none; padding-right: 36px;
   .casca-mb-top b { flex: 1; font-size: 17px; font-weight: 800; color: var(--texto-marca); letter-spacing: -.01em; }
   .casca-mb-top img { height: 30px; width: auto; }
   .casca-mb-top button { width: 40px; height: 40px; border: 0; background: none; color: var(--ink-2); display: grid; place-items: center; border-radius: 10px; }
-  .casca-mb-nav { position: fixed; inset: auto 0 0 0; z-index: 30; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--papel); border-top: 1px solid var(--linha); padding: 8px 6px calc(10px + env(safe-area-inset-bottom)); }
+  .casca-mb-nav { position: fixed; inset: auto 0 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, 1fr); background: var(--papel); border-top: 1px solid var(--linha); padding: 8px 6px calc(10px + env(safe-area-inset-bottom)); }
   .casca-mb-nav a { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; font-size: 11px; font-weight: 700; color: var(--ink-2); text-decoration: none; border-radius: 10px; position: relative; }
   .casca-mb-nav a[aria-current="page"] { color: var(--texto-marca); }
   .casca-mb-nav a .n { position: absolute; top: 2px; right: calc(50% - 24px); font-size: 11px; font-weight: 800; background: var(--coral-texto); color: #fff; border-radius: 999px; padding: 0 6px; }
