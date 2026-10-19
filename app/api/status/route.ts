@@ -18,6 +18,9 @@ export async function GET() {
       destino: analisesStore.destino(),
       ultima: (await analisesStore.listar(1))[0] ?? null,
     },
+    // Versão no ar: o commit do deploy. Evita testar uma prévia antiga achando
+    // que é a nova.
+    versao: (process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7) || "local",
     armazenamento: { backend: backend(), uploadDireto: modoUploadDireto() !== null, modoUpload: modoUploadDireto(), acesso: acessoBlob() },
     parametros: store.getParametros(),
     carteira: { ...(await carteira.resumo(store.getDataset().dataPosicao)), durable: carteira.durable() },

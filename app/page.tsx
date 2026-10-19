@@ -139,6 +139,9 @@ export default function Dashboard() {
   const destinosAjustados = destinos.filter((d) => Math.abs(d.necessidadeBrutaQtd - d.necessidadeQtd) > 1).length;
   const emAberto = Math.max(0, kpis.necessidadeTotalRs - kpis.valorTransfTotal);
   const dataBase = data.analise.criadoEm ? new Date(data.analise.criadoEm).toLocaleDateString("pt-BR") : "";
+  // Unidades transferidas e nenhum real: a base entrou sem custo nem preço (ou
+  // a coluna não foi reconhecida). Sem este aviso a tela dizia "nada em aberto".
+  const semValor = kpis.qtdTransfTotal > 0 && kpis.valorTransfTotal <= 0 && kpis.necessidadeTotalRs <= 0;
 
   return (
     <>
@@ -183,8 +186,14 @@ export default function Dashboard() {
         {data.regras?.semRestricoes && <Badge tom="good">Sem restrições</Badge>}
       </div>
 
-      {(painel.erro || data.somenteResultado || (data.aprovado && data.aprovado.linhas > 0) || kpis.rotasSemAliquota.length > 0) && (
+      {(semValor || painel.erro || data.somenteResultado || (data.aprovado && data.aprovado.linhas > 0) || kpis.rotasSemAliquota.length > 0) && (
         <div className="flex flex-col gap-3">
+          {semValor && (
+            <Alert tom="erro" titulo="Análise sem valor em R$" acao={<Link href="/analise" className="pgm-botao pgm-botao--secundario">Reimportar a base</Link>}>
+              O plano tem {fmtInt(kpis.qtdTransfTotal)} un, mas tudo saiu em R$ 0: a base desta análise entrou sem custo nem preço. Confira a coluna de
+              custo na validação da importação e rode a análise de novo — os percentuais abaixo não valem.
+            </Alert>
+          )}
           {painel.erro && (
             <Alert tom="erro" titulo="Falha ao atualizar" acao={<button onClick={painel.recarregar} className="pgm-botao pgm-botao--secundario" type="button">Tentar de novo</button>}>
               {painel.erro}. Os números abaixo são da última carga bem-sucedida.
@@ -231,7 +240,7 @@ export default function Dashboard() {
             </Insight>
             <Decisao>Ampliar {artigo} {nomeGargalo} ou aceitar que {fmtRsCompacto(data.capacidade.valorBloqueado)} sigam em aberto para a próxima análise.</Decisao>
           </>
-        ) : (
+        ) : semValor ? null : (
           <Insight>
             O plano cobre <b>{fmtPct(kpis.coberturaNecessidade, 0)}</b> da necessidade com <b>{fmtPct(kpis.usoDoExcesso, 0)}</b> do excesso das origens.{" "}
             {emAberto > 0 ? <>Ficam <b>{fmtRsCompacto(emAberto)}</b> em aberto para a próxima análise.</> : "Nenhuma necessidade ficou em aberto."}
