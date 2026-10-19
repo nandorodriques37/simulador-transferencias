@@ -55,6 +55,17 @@ describe("parse da base de CDs", () => {
     expect(r.achados.some((a) => a.codigo === "emb_zero")).toBe(false);
   });
 
+  it("avisa quando faltam descrição e categoria N3, sem bloquear", () => {
+    const { itens, diag } = parseBase([{ cd: 1, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1 }]);
+    const r = validarImportacao(itens, [], diag, undefined, "saldo_ideal");
+    const a = r.achados.find((x) => x.codigo === "sem_descricao");
+    expect(r.ok).toBe(true);
+    expect(a?.qtd).toBe(2);
+    const com = parseBase([{ cd: 1, codigo_produto: 8, estoque_disponivel: 10, estoque_objetivo: 5, venda_media_3m: 1, produto: "DIPIRONA", categoria_n3: "ANALGÉSICOS" }]);
+    expect(com.itens[0].categoriaN3).toBe("ANALGÉSICOS");
+    expect(validarImportacao(com.itens, [], com.diag, undefined, "saldo_ideal").achados.some((x) => x.codigo === "sem_descricao")).toBe(false);
+  });
+
   it("aponta a coluna obrigatória ausente com os nomes aceitos", () => {
     const { diag } = parseBase([{ Deposito: 10, CodsemDv: 111, Estoque_DISP_CDs: 10, ESTOQUE_OBJETIVO: 5 }]);
     expect(diag.faltando.map((f) => f.campo)).toContain("vendaMedia3m");

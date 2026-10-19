@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
-import { extrairFacets, filtrarPlano, ordenarPlano, paginar } from "@/lib/query/plano";
+import { categoriaDe, extrairFacets, filtrarPlano, ordenarPlano, paginar } from "@/lib/query/plano";
 import { LinhaPlano } from "@/lib/engine/types";
 import { carteira } from "@/lib/store/carteira";
 import { analisesStore } from "@/lib/store/analises";
@@ -63,6 +63,6 @@ export async function GET(req: NextRequest) {
     page: pagina.page,
     pageSize: pagina.pageSize,
     totalPaginas: pagina.totalPaginas,
-    itens: pagina.itens.map((l) => ({ ...l, naCarteira: aprovadas.has(`${l.rota}|${l.codigoProduto}`) })),
+    itens: pagina.itens.map((l) => ({ ...l, categoria: categoriaDe(l), naCarteira: aprovadas.has(`${l.rota}|${l.codigoProduto}`) })),
   });
 }

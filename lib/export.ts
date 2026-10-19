@@ -1,4 +1,5 @@
 import { LinhaPlano } from "@/lib/engine/types";
+import { categoriaDe } from "@/lib/query/plano";
 import { rotuloMes } from "@/lib/data/defaults";
 import { Sugestao } from "@/lib/store/carteira";
 
@@ -21,7 +22,7 @@ export function colunasPlano(meses: string[], modoPedidos: boolean): string[] {
     "Fornecedor",
     "Comprador",
     "Analista",
-    "Categoria N1",
+    "Categoria N3",
     ...(modoPedidos ? rot.map((m) => `Pedido ${m}`) : ["Necessidade destino (un)"]),
     ...(modoPedidos ? rot.map((m) => `Transf. ${m}`) : ["Transferir (un)"]),
     "Qtd Total (un)",
@@ -51,7 +52,7 @@ export function linhaParaArray(l: LinhaPlano, modoPedidos: boolean): (string | n
     l.fornecedor,
     l.comprador,
     l.analista,
-    l.categoriaN1,
+    categoriaDe(l),
     ...(modoPedidos ? l.demandaMes : [l.demandaSaldo]),
     ...(modoPedidos ? l.transfMes : [l.transfSaldo]),
     l.transfTotal,

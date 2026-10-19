@@ -354,7 +354,12 @@ export default function NovaAnalise() {
                     </div>
                     <button type="button" className="pgm-botao pgm-botao--secundario" onClick={() => baseRef.current?.click()}>{baseFile ? "Trocar" : "Escolher arquivo"}</button>
                   </div>
-                  <span className="pgm-campo__ajuda">CD · código do produto · estoque disponível · estoque objetivo · quantidade pendente · venda média 3m · custo ou preço · embalagem.{dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}</span>
+                  <span className="pgm-campo__ajuda">
+                    <b>Obrigatórias:</b> CD · código do produto · estoque disponível · estoque objetivo · venda média 3m (média mensal).{" "}
+                    <b>Para o plano ficar legível:</b> descrição do produto · categoria N3.{" "}
+                    <b>Recomendadas:</b> quantidade pendente · custo · embalagem.
+                    {dataset.fonteBase && <> Fonte atual: <b>{dataset.fonteBase}</b>.</>}
+                  </span>
                 </div>
                 <div className="pgm-campo" style={{ gap: 8 }}>
                   <span className="pgm-campo__rotulo">Base de pedidos · para o modo pedidos</span>

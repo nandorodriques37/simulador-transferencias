@@ -33,7 +33,7 @@ export interface ColSpec {
 export const SCHEMA_BASE: ColSpec[] = [
   { campo: "cd", rotulo: "CD (depósito)", aliases: ["Deposito", "deposito", "cd", "CD", "codigo_deposito", "deposito_origem", "cd_origem"], required: true, tipo: "int", naoNegativo: true, chave: true },
   { campo: "codigoProduto", rotulo: "Código do produto", aliases: ["CodsemDv", "codigo_produto", "codigoProduto", "codigo", "Cod", "produto_codigo"], required: true, tipo: "int", naoNegativo: true, chave: true },
-  { campo: "produto", rotulo: "Descrição do produto", aliases: ["Produto", "descricao", "produto", "nome_produto", "Descrição"], required: false, tipo: "str" },
+  { campo: "produto", rotulo: "Descrição do produto", aliases: ["Produto", "descricao", "produto", "nome_produto", "Descrição", "descricao_produto", "desc_produto", "produto_descricao", "nome"], required: false, tipo: "str" },
   { campo: "estoqueDisponivel", rotulo: "Estoque disponível", aliases: ["Estoque_DISP_CDs", "estoque_disponivel", "estoqueDisponivel", "EstoqueDisponivel", "estoque_disp"], required: true, tipo: "num", naoNegativo: true },
   { campo: "estoqueObjetivo", rotulo: "Estoque objetivo", aliases: ["ESTOQUE_OBJETIVO", "estoque_objetivo", "estoqueObjetivo", "saldo_estoque_objetivo", "eo"], required: true, tipo: "num", naoNegativo: true },
   { campo: "quantidadePendente", rotulo: "Quantidade pendente", aliases: ["Quant.Pendente", "quantidade_pendente", "quantidadePendente", "QuantPendente", "pendente", "em_transito"], required: false, tipo: "num", naoNegativo: true },
@@ -46,7 +46,7 @@ export const SCHEMA_BASE: ColSpec[] = [
   { campo: "analista", rotulo: "Analista", aliases: ["Analista", "analista"], required: false, tipo: "str" },
   { campo: "categoriaN1", rotulo: "Categoria nível 1", aliases: ["CAT_NÍVEL_1", "categoria_n1", "categoriaN1", "categoria_nivel_1"], required: false, tipo: "str" },
   { campo: "categoriaN2", rotulo: "Categoria nível 2", aliases: ["CAT_NÍVEL_2", "categoria_n2", "categoriaN2", "categoria_nivel_2"], required: false, tipo: "str" },
-  { campo: "categoriaN3", rotulo: "Categoria nível 3", aliases: ["CAT_NÍVEL_3", "categoria_n3", "categoriaN3", "categoria_nivel_3"], required: false, tipo: "str" },
+  { campo: "categoriaN3", rotulo: "Categoria nível 3", aliases: ["CAT_NÍVEL_3", "categoria_n3", "categoriaN3", "categoria_nivel_3", "cat_n3", "categoria_3", "categoria"], required: false, tipo: "str" },
   { campo: "categoriaN4", rotulo: "Categoria nível 4", aliases: ["CAT_NÍVEL_4", "categoria_n4", "categoriaN4", "categoria_nivel_4"], required: false, tipo: "str" },
   { campo: "flagAme", rotulo: "Flag AME", aliases: ["FLAG_AME", "flag_ame", "ame"], required: false, tipo: "str" },
   { campo: "monitorado", rotulo: "Monitorado", aliases: ["Monitorado", "monitorado"], required: false, tipo: "str" },

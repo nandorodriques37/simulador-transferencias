@@ -168,7 +168,9 @@ latin1 é detectado automaticamente.
 | Quantidade pendente | `quantidadePendente` | — |
 | Custo de reposição (`custo`, `custo_reposicao`…) / Preço de lista | `custoReposicao` / `precoLista` | — |
 | Embalagem de compra (`embalagem`, `emb_compra`…) | `embCompra` | — |
-| Fornecedor · comprador · analista · categorias N1–N4 | — | — |
+| Descrição do produto (`produto`, `descricao`, `nome_produto`) | `produto` | ⚠️ não bloqueia, mas sem ela o plano mostra só o código |
+| Categoria N3 (`categoria_n3`, `CAT_NÍVEL_3`, `categoria`) | `categoriaN3` | ⚠️ é a categoria exibida e filtrada no plano (sem N3, usa a N1) |
+| Fornecedor · comprador · analista · categorias N1, N2, N4 | — | — |
 | Unidades por palete | `unidadesPorPalete` | — (só para capacidade em paletes) |
 | Peso unitário (kg) | `pesoUnitario` | — (só para capacidade em peso) |
 | Cubagem unitária (m³) | `cubagemUnitaria` | — (só para capacidade em volume) |

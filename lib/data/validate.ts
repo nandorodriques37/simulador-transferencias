@@ -126,6 +126,35 @@ export function validarImportacao(
   if (dupPed.length)
     add({ nivel: "aviso", codigo: "pedido_duplicado", mensagem: "Chaves (ano_mês, CD, produto) repetidas na base de pedidos — as quantidades serão somadas.", qtd: dupPed.length, exemplos: dupPed });
 
+  // --- Descrição e categoria N3: não entram na conta, mas sem elas o plano
+  // vira uma lista de códigos que ninguém consegue revisar nem filtrar. ---
+  if (diagBase && base.length) {
+    const mapeado = new Set(diagBase.mapeadas.map((m) => m.campo));
+    const faltaCol = [
+      !mapeado.has("produto") && "descrição do produto (produto, descricao, nome_produto)",
+      !mapeado.has("categoriaN3") && "categoria N3 (categoria_n3, CAT_NÍVEL_3, categoria)",
+    ].filter(Boolean) as string[];
+    if (faltaCol.length)
+      add({
+        nivel: "aviso",
+        codigo: "sem_descricao",
+        mensagem: "A base não traz colunas que o plano usa para revisar e filtrar. O cálculo sai certo, mas o plano mostra só o código. Inclua na próxima base:",
+        qtd: faltaCol.length,
+        exemplos: faltaCol,
+      });
+    const vazias = (campo: "produto" | "categoriaN3") => (mapeado.has(campo) ? base.filter((l) => !l[campo]).length : 0);
+    const semNome = vazias("produto");
+    const semCat = vazias("categoriaN3");
+    if (semNome || semCat)
+      add({
+        nivel: "info",
+        codigo: "descricao_vazia",
+        mensagem: "Linhas com descrição ou categoria N3 em branco.",
+        qtd: Math.max(semNome, semCat),
+        exemplos: [semNome && `${semNome} sem descrição`, semCat && `${semCat} sem categoria N3`].filter(Boolean) as string[],
+      });
+  }
+
   // --- Avisos de negócio (não bloqueiam) ---
   // Preço e embalagem só pesam na linha que pode ser ORIGEM: a transferência é
   // valorizada pelo custo da origem e arredondada pela embalagem dela. Contar

@@ -1,11 +1,19 @@
 import { LinhaPlano } from "@/lib/engine/types";
 
+/**
+ * Categoria exibida e filtrada no plano: a N3, que é o nível com que o
+ * planejamento trabalha. Base sem N3 cai para a N1, para não ficar em branco.
+ */
+export function categoriaDe(l: Pick<LinhaPlano, "categoriaN1" | "categoriaN3">): string {
+  return l.categoriaN3 || l.categoriaN1 || "";
+}
+
 export interface FiltrosPlano {
   cobertura?: "total" | "acima_limite";
   limiteDias?: number;
   cdOrigem?: number | null;
   cdDestino?: number | null;
-  categoria?: string | null; // categoriaN1
+  categoria?: string | null; // categoriaN3 (ou N1, sem N3) — ver categoriaDe
   fornecedor?: string | null;
   comprador?: string | null;
   analista?: string | null;
@@ -26,7 +34,7 @@ export function filtrarPlano(linhas: LinhaPlano[], f: FiltrosPlano): LinhaPlano[
     if (f.cobertura === "acima_limite" && l.coberturaDias <= lim) return false;
     if (f.cdOrigem != null && l.cdOrigem !== f.cdOrigem) return false;
     if (f.cdDestino != null && l.cdDestino !== f.cdDestino) return false;
-    if (f.categoria && l.categoriaN1 !== f.categoria) return false;
+    if (f.categoria && categoriaDe(l) !== f.categoria) return false;
     if (f.fornecedor && l.fornecedor !== f.fornecedor) return false;
     if (f.comprador && l.comprador !== f.comprador) return false;
     if (f.analista && l.analista !== f.analista) return false;
@@ -72,7 +80,8 @@ export function extrairFacets(linhas: LinhaPlano[]): Facets {
     origens.add(l.cdOrigem);
     destinos.add(l.cdDestino);
     rotas.add(l.rota);
-    if (l.categoriaN1) categorias.add(l.categoriaN1);
+    const cat = categoriaDe(l);
+    if (cat) categorias.add(cat);
     if (l.fornecedor) fornecedores.add(l.fornecedor);
     if (l.comprador) compradores.add(l.comprador);
     if (l.analista) analistas.add(l.analista);
