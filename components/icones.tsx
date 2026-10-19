@@ -12,6 +12,7 @@ const TRACOS: Record<string, ReactNode> = {
   acompanhamento: (<><path d="M4 20h16" /><path d="M4 16l5-5 4 3 7-8" /><path d="M16 6h4v4" /></>),
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   fechar: <path d="M6 6l12 12M18 6L6 18" />,
+  lixeira: (<><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12" /><path d="M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2" /></>),
   seta: <path d="M5 12h14M13 6l6 6-6 6" />,
   cima: <path d="M6 15l6-6 6 6" />,
   baixo: <path d="M6 9l6 6 6-6" />,

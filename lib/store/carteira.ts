@@ -600,6 +600,32 @@ export const carteira = {
       .filter((s) => f.cdDestino == null || s.cdDestino === f.cdDestino);
   },
 
+  /** Saldo em aberto que cada análise ainda tem na carteira. */
+  async abertasPorAnalise(): Promise<Map<string, { sugestoes: number; qtd: number; valor: number }>> {
+    const out = new Map<string, { sugestoes: number; qtd: number; valor: number }>();
+    for (const s of await carregarAbertas()) {
+      const aberto = qtdAberta(s);
+      if (aberto <= 0) continue;
+      const a = out.get(s.analiseId) ?? { sugestoes: 0, qtd: 0, valor: 0 };
+      a.sugestoes++;
+      a.qtd += aberto;
+      a.valor += aberto * s.preco;
+      out.set(s.analiseId, a);
+    }
+    return out;
+  },
+
+  /**
+   * Cancela o que ainda está em aberto das sugestões destas análises. Faturadas
+   * não mudam; faturadas em parte mantêm a baixa e só o saldo deixa de valer.
+   */
+  async cancelarDasAnalises(analiseIds: string[], por: string): Promise<number> {
+    if (!analiseIds.length) return 0;
+    const alvo = new Set(analiseIds);
+    const ids = (await carregarAbertas()).filter((s) => alvo.has(s.analiseId)).map((s) => s.id);
+    return ids.length ? this.cancelar(ids, por) : 0;
+  },
+
   /** Rota + produto (`"10>1|123"`) já levados à carteira por uma análise. */
   async chavesDaAnalise(analiseId: string): Promise<Set<string>> {
     const pool = getPool();

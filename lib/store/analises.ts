@@ -2,6 +2,7 @@ import { ParametrosRede, Reconciliacao, ResumoDestino, ResumoOrigem, ResumoRota 
 import { Kpis } from "@/lib/query/aggregate";
 import { dbEnabled, getPool } from "@/lib/store/db";
 import { armazenamentoDuravel, guardar, recuperar, remover } from "@/lib/store/armazenamento";
+import { planosStore } from "@/lib/store/planos";
 
 /**
  * RESULTADO DAS ANÁLISES — o que o app guarda de verdade.
@@ -67,7 +68,9 @@ async function indiceArquivo(): Promise<string[]> {
 async function salvarNoArmazenamento(a: AnaliseSalva): Promise<void> {
   await guardar(`analise/${a.id}.json`, JSON.stringify(a));
   const idx = await indiceArquivo();
-  const novo = [a.id, ...idx.filter((x) => x !== a.id)].slice(0, MAX_GUARDADAS);
+  // Regravar uma análise que já existe (ex.: registrar aprovação) mantém a
+  // posição dela: subir para o topo a faria passar pela "mais recente".
+  const novo = (idx.includes(a.id) ? idx : [a.id, ...idx]).slice(0, MAX_GUARDADAS);
   await guardar(CHAVE_INDICE, JSON.stringify(novo));
 
   // Análise que saiu da janela leva junto o plano dela.
@@ -217,6 +220,32 @@ export const analisesStore = {
       destinos: a.parametros?.destinos ?? [],
       aprovado: a.aprovado,
     }));
+  },
+
+  /**
+   * Exclui análises: o resultado e o plano guardado. A carteira NÃO é tocada
+   * aqui — sugestões aprovadas valem por si; quem decide cancelá-las é a rota.
+   */
+  async excluir(ids: string[]): Promise<number> {
+    const alvo = Array.from(new Set(ids.filter(Boolean)));
+    if (!alvo.length) return 0;
+    let n = 0;
+    const pool = getPool();
+    if (pool) {
+      await ensureSchema();
+      const { rowCount } = await pool.query(`DELETE FROM analise_resultado WHERE id = ANY($1::text[])`, [alvo]);
+      n = rowCount ?? 0;
+    } else {
+      const idx = await indiceArquivo();
+      for (const id of alvo) if (mem().delete(id) || idx.includes(id)) n++;
+      const resto = idx.filter((x) => !alvo.includes(x));
+      if (resto.length !== idx.length) await guardar(CHAVE_INDICE, JSON.stringify(resto));
+      for (const id of alvo) await remover(`analise/${id}.json`);
+    }
+    // O plano vive no armazenamento nos dois modos — com banco, ele nunca era
+    // apagado e ficava sobrando para sempre.
+    for (const id of alvo) await planosStore.remover(id);
+    return n;
   },
 
   /** Marca o que foi aprovado a partir desta análise (controle de execução). */

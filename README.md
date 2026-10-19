@@ -282,6 +282,11 @@ cenário cheio, ignorando a carteira, sem apagar nada.
 4. **Carteira** — sugestões em aberto e faturadas, cancelamento, **modal de
    importação do faturamento** (com prévia) e geração da **ordem de
    transferência** para ERP/WMS com o saldo em aberto.
+   No dashboard, o **histórico de análises** permite excluir uma ou várias
+   (seleção em lote). A confirmação lista o que sai, avisa se é a análise
+   aberta e mostra quantas sugestões em aberto cada uma ainda tem na carteira —
+   com a opção de cancelá-las junto (desligada por padrão). Excluir apaga o
+   resultado e o plano guardado; faturamento já registrado nunca é apagado.
 5. **Acompanhamento** — o que foi aprovado virou NF, e em quanto tempo:
    - **aprovado × faturado** por rota, por CD de origem e por CD de destino, em
      R$ ou unidades: `aprovado = faturado + em aberto + cancelado`, e o

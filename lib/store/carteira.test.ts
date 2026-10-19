@@ -279,3 +279,22 @@ describe("escala real da carteira", () => {
     expect(comp.saidaOrigem.get("10|111")).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe("cancelar junto com a análise excluída", () => {
+  it("mostra o saldo em aberto por análise e cancela só o daquelas análises", async () => {
+    await carteira.aprovar("a1", [item(500), item(200, { codigoProduto: 222 })], "user", { consideraAprovadas: true });
+    await carteira.aprovar("a2", [item(100, { codigoProduto: 333 })], "user", { consideraAprovadas: true });
+    // Parte da a1 já foi faturada: essa parte não pode sumir.
+    await carteira.baixarFaturamento([{ cdOrigem: 10, cdDestino: 1, codigoProduto: 111, quantidade: 300, documento: "NF-1" }], "user", "f.csv", "imp-1");
+
+    const abertas = await carteira.abertasPorAnalise();
+    expect(abertas.get("a1")).toMatchObject({ sugestoes: 2, qtd: 400 });
+    expect(abertas.get("a2")).toMatchObject({ sugestoes: 1, qtd: 100 });
+
+    expect(await carteira.cancelarDasAnalises(["a1"], "user")).toBe(2);
+    const resumo = await carteira.resumo();
+    expect(resumo.qtdAberta).toBe(100); // só a a2 segue reservando
+    expect(resumo.qtdFaturada).toBe(300); // o faturado da a1 continua registrado
+    expect((await carteira.abertasPorAnalise()).has("a1")).toBe(false);
+  });
+});

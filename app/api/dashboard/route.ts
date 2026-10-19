@@ -83,7 +83,9 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const id = sp.get("analiseId") ?? undefined;
   const salva = id ? await analisesStore.obter(id) : await analisesStore.ultima();
-  const emMemoria = store.getAnalise(id);
+  // A memória só vale para a análise que o banco aponta: uma excluída em outra
+  // instância não pode reaparecer aqui.
+  const emMemoria = store.getAnalise(id ?? salva?.id);
   const cobertura = (sp.get("cobertura") as "total" | "acima_limite") ?? "total";
 
   // Sem filtro, os agregados salvos já respondem à tela inteira — não vale
@@ -96,7 +98,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Com filtro de cobertura, precisamos das linhas: memória ou plano guardado.
-  const plano = await store.obterPlano(id);
+  const plano = await store.obterPlano(id ?? salva?.id);
   if (!plano) {
     if (!salva) return NextResponse.json({ erro: "nenhuma análise rodada ainda", semAnalise: true }, { status: 404 });
     return NextResponse.json({ ...doResultadoSalvo(salva), cobertura: "total", planoDisponivel: false });

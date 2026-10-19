@@ -1,5 +1,5 @@
 import { LinhaPlano, ParametrosRede } from "@/lib/engine/types";
-import { guardar, recuperar } from "./armazenamento";
+import { guardar, recuperar, remover } from "./armazenamento";
 
 /**
  * PLANO PERSISTIDO — as linhas (origem × destino × SKU) da análise.
@@ -180,6 +180,12 @@ export const planosStore = {
       if (primeira === undefined) break;
       c.delete(primeira);
     }
+  },
+
+  /** Apaga o plano guardado (e a cópia em memória) de uma análise. */
+  async remover(analiseId: string): Promise<void> {
+    cache().delete(analiseId);
+    await remover("plano/" + analiseId + ".tsv");
   },
 
   /** Linhas do plano: memória desta instância ou armazenamento. */
